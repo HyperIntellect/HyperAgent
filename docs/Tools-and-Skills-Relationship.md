@@ -14,10 +14,11 @@ Agent (Task / Research)
   ▼
 Tool Registry (TOOL_CATALOG)
   ├── Direct tools: web_search, execute_code, browser_*, generate_image, ...
+  ├── CodeAct: execute_script (opt-in, with hyperagent helper library)
   ├── App builder tools: create_app_project, app_write_file, ...
   ├── Skill bridge: invoke_skill, list_skills
   ├── HITL: ask_user
-  └── Handoff: handoff_to_research (dynamic)
+  └── Handoff: handoff_to_research (dynamic, with artifact transfer)
         │
         │  invoke_skill("data_analysis", {...})
         ▼
@@ -47,6 +48,7 @@ All tools are registered in `backend/app/agents/tools/registry.py`:
 | **APP_BUILDER** | `create_app_project`, `app_start_server`, `app_run_command`, `app_install_packages`, `app_get_preview_url` | `tools/app_builder.py` |
 | **SKILL** | `invoke_skill`, `list_skills` | `tools/skill_invocation.py` |
 | **HITL** | `ask_user` | `tools/hitl_tool.py` |
+| **CODEACT** | `execute_script` (opt-in via `execution_mode: "codeact"`) | `tools/codeact.py` |
 | **HANDOFF** | `handoff_to_research` (dynamic per agent) | `tools/handoff.py` |
 
 ### Agent Tool Access
@@ -55,8 +57,10 @@ Each agent type gets a subset of categories via `AGENT_TOOL_MAPPING`:
 
 | Agent | Categories |
 |-------|-----------|
-| **Task** | SEARCH, IMAGE, SLIDES, BROWSER, CODE_EXEC, APP_BUILDER, SKILL, HANDOFF, HITL |
+| **Task** | SEARCH, IMAGE, SLIDES, BROWSER, CODE_EXEC, CODEACT*, APP_BUILDER, SKILL, HANDOFF, HITL |
 | **Research** | SEARCH, IMAGE, BROWSER, SKILL, HANDOFF, HITL |
+
+*CODEACT tools are only included when `execution_mode` is set to `"codeact"` in configuration.
 
 Key: Research agent has no CODE_EXEC, DATA, APP_BUILDER, or SLIDES access.
 
@@ -95,8 +99,21 @@ The pipeline has three hook implementations:
 
 | Injection Type | Tools |
 |---------------|-------|
-| **user_id + task_id** | All browser tools, all app builder tools, `invoke_skill`, `execute_code`, `sandbox_file` |
+| **user_id + task_id** | All browser tools, all app builder tools, `invoke_skill`, `execute_code`, `execute_script`, `sandbox_file` |
 | **user_id only** | `generate_image`, `generate_slides` |
+
+### Tool Soft-Disable
+
+For KV-cache optimization, tools can be "soft-disabled" instead of removed from the tool schema:
+
+```python
+from app.agents.tools.registry import soft_disable_tool, get_soft_disabled_message
+
+soft_disable_tool("execute_code")  # Tool schema remains, but system message notes it's unavailable
+msg = get_soft_disabled_message()  # "The following tools are currently unavailable: execute_code"
+```
+
+This preserves the stable tool schema prefix across LLM iterations, improving cache hit rates.
 
 ---
 

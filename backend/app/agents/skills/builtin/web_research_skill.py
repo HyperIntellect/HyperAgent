@@ -59,6 +59,11 @@ class WebResearchSkill(Skill):
             },
         },
         required_tools=[],
+        risk_level="low",
+        side_effect_level="none",
+        data_sensitivity="public",
+        network_scope="external",
+        idempotency_hint=True,
         max_iterations=3,
         tags=["research", "web", "search"],
     )

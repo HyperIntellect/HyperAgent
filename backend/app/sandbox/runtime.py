@@ -91,6 +91,38 @@ class SandboxRuntime(Protocol):
         """
         ...
 
+    async def save_snapshot(
+        self,
+        paths: list[str],
+        snapshot_id: str,
+    ) -> bytes:
+        """Tar the specified paths and return the archive bytes.
+
+        Args:
+            paths: List of absolute paths in the sandbox to include
+            snapshot_id: Unique identifier for this snapshot (used in tar name)
+
+        Returns:
+            Raw tar.gz bytes of the snapshot archive
+        """
+        ...
+
+    async def restore_snapshot(
+        self,
+        snapshot_data: bytes,
+        target_path: str,
+    ) -> bool:
+        """Restore a tar archive to the specified target path.
+
+        Args:
+            snapshot_data: Raw tar.gz bytes to restore
+            target_path: Directory to extract the archive into
+
+        Returns:
+            True if restore succeeded, False otherwise
+        """
+        ...
+
     async def kill(self) -> None:
         """Terminate and clean up the sandbox."""
         ...

@@ -29,6 +29,11 @@ from app.sandbox.execution_sandbox_manager import (
     ExecutionSandboxSession,
     get_execution_sandbox_manager,
 )
+from app.sandbox.unified_sandbox_manager import (
+    UnifiedSandboxManager,
+    UnifiedSandboxSession,
+    get_unified_sandbox_manager,
+)
 from app.sandbox.file import (
     sandbox_file,
     sandbox_file_with_context,
@@ -39,49 +44,58 @@ def get_sandbox_metrics() -> dict[str, Any]:
     """Get unified metrics from all sandbox managers.
 
     Returns:
-        Dict with metrics from execution, desktop, and app sandbox managers:
+        Dict with metrics from execution, desktop, app, and unified sandbox managers:
             - execution: Metrics from execution sandbox manager
             - desktop: Metrics from desktop sandbox manager
             - app: Metrics from app sandbox manager
+            - unified: Metrics from unified sandbox manager
             - totals: Aggregated totals across all managers
     """
     execution_manager = get_execution_sandbox_manager()
     desktop_manager = get_desktop_sandbox_manager()
     app_manager = get_app_sandbox_manager()
+    unified_manager = get_unified_sandbox_manager()
 
     execution_metrics = execution_manager.get_metrics()
     desktop_metrics = desktop_manager.get_metrics()
     app_metrics = app_manager.get_metrics()
+    unified_metrics = unified_manager.get_metrics()
 
     return {
         "execution": execution_metrics,
         "desktop": desktop_metrics,
         "app": app_metrics,
+        "unified": unified_metrics,
         "totals": {
             "active_sessions": (
                 execution_metrics["active_sessions"]
                 + desktop_metrics["active_sessions"]
                 + app_metrics["active_sessions"]
+                + unified_metrics["active_sessions"]
             ),
             "total_created": (
                 execution_metrics["total_created"]
                 + desktop_metrics["total_created"]
                 + app_metrics["total_created"]
+                + unified_metrics["total_created"]
             ),
             "total_cleaned": (
                 execution_metrics["total_cleaned"]
                 + desktop_metrics["total_cleaned"]
                 + app_metrics["total_cleaned"]
+                + unified_metrics["total_cleaned"]
             ),
             "total_reused": (
                 execution_metrics["total_reused"]
                 + desktop_metrics["total_reused"]
                 + app_metrics["total_reused"]
+                + unified_metrics["total_reused"]
             ),
             "health_check_failures": (
                 execution_metrics["health_check_failures"]
                 + desktop_metrics["health_check_failures"]
                 + app_metrics["health_check_failures"]
+                + unified_metrics["health_check_failures"]
             ),
         },
     }
@@ -179,8 +193,24 @@ async def cleanup_sandboxes_for_task(user_id: str, task_id: str) -> dict[str, bo
         "desktop": False,
         "execution": False,
         "app": False,
+        "unified": False,
     }
     cleanup_errors: dict[str, str] = {}
+
+    # Cleanup unified sandbox first (it owns the shared runtime)
+    try:
+        unified_manager = get_unified_sandbox_manager()
+        results["unified"] = await unified_manager.cleanup_session(
+            user_id=user_id, task_id=task_id
+        )
+    except Exception as e:
+        cleanup_errors["unified"] = str(e)
+        logger.warning(
+            "unified_sandbox_cleanup_failed",
+            user_id=user_id,
+            task_id=task_id,
+            error=str(e),
+        )
 
     # Cleanup desktop sandbox
     try:
@@ -257,6 +287,10 @@ __all__ = [
     "AppSandboxManager",
     "get_app_sandbox_manager",
     "APP_TEMPLATES",
+    # Unified sandbox management
+    "UnifiedSandboxManager",
+    "UnifiedSandboxSession",
+    "get_unified_sandbox_manager",
     # Sandbox file operations
     "sandbox_file",
     "sandbox_file_with_context",

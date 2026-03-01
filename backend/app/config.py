@@ -126,7 +126,7 @@ class Settings(BaseSettings):
     # BoxLite Local Sandbox
     boxlite_code_image: str = "python:3.12-slim"
     boxlite_desktop_image: str = "boxlite/desktop:latest"
-    boxlite_app_image: str = "node:20-slim"
+    boxlite_app_image: str = "hyperagent/app-sandbox:latest"
     boxlite_cpus: int = 2
     boxlite_memory_mib: int = 1024
     boxlite_disk_size_gb: int = 4  # Disk size in GB (needed for npm/node scaffolding)
@@ -136,6 +136,12 @@ class Settings(BaseSettings):
     boxlite_desktop_default_browser: str = "chromium-browser"
     boxlite_auto_remove: bool = True
     boxlite_app_host_port_start: int = 10000
+
+    # Sandbox Snapshots
+    snapshot_max_size_bytes: int = 100 * 1024 * 1024  # 100MB max per snapshot
+    snapshot_retention_hours: int = 24  # Default retention period
+    snapshot_default_paths_execution: list[str] = ["/home/user", "/tmp/outputs"]
+    snapshot_default_paths_app: list[str] = ["/home/user/app"]
 
     # Search
     tavily_api_key: str = ""
@@ -164,6 +170,13 @@ class Settings(BaseSettings):
 
     # ReAct Loop Configuration
     react_max_iterations: int = 5  # Maximum number of tool-calling iterations
+
+    # Feature flags for progressive rollout
+    policy_engine_v1: bool = True
+    planner_verifier_v1: bool = True
+    parallel_executor_v1: bool = True
+    run_ledger_v1: bool = True
+    parallel_executor_max_agents: int = 4
 
     # MCP (Model Context Protocol) settings
     mcp_enabled: bool = True

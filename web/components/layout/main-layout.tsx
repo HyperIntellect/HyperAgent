@@ -48,7 +48,9 @@ export function MainLayout({ children }: MainLayoutProps) {
 
             <main
                 className="flex-1 flex flex-col overflow-hidden relative transition-colors duration-150"
-                style={{ paddingRight: rightPanelPadding }}
+                style={{
+                    paddingRight: rightPanelPadding || undefined,
+                }}
             >
                 {/* Mobile header with menu toggle and user profile */}
                 <div className="md:hidden h-12 px-3 flex items-center justify-between border-b border-border bg-background sticky top-0 z-30">
@@ -90,7 +92,9 @@ export function MainLayout({ children }: MainLayoutProps) {
                     <UserProfileMenu />
                 </div>
 
-                {children}
+                <div className="flex-1 flex flex-col overflow-hidden w-full">
+                    {children}
+                </div>
 
                 {/* File Preview Sidebar */}
                 <FilePreviewSidebar />

@@ -49,6 +49,7 @@ All sandbox types use a prefixed session key format:
 
 | Sandbox Type | Key Format |
 |-------------|------------|
+| Unified sandbox | `unified:{user_id}:{task_id}` |
 | App sandbox | `app:{user_id}:{task_id}` |
 | Desktop sandbox | `desktop:{user_id}:{task_id}` |
 
@@ -99,8 +100,20 @@ chat_task_id = request.task_id or request.conversation_id or str(uuid.uuid4())
 
 ### Sandbox Managers
 
+**Unified Sandbox Manager** (`backend/app/sandbox/unified_sandbox_manager.py`)
+- Provides a single shared `SandboxRuntime` for both code execution and app development within one agent run
+- Session key: `unified:{user_id}:{task_id}`
+- Session timeout: 30 minutes (default)
+- `get_or_create_runtime(user_id, task_id)` — shared runtime for both code and app
+- `get_code_executor(user_id, task_id)` — wraps shared runtime as `BaseCodeExecutor`
+- `get_app_session(user_id, task_id, template)` — wraps shared runtime as `AppSandboxSession`
+- Desktop sandboxes remain separate (different VM image requirement)
+- Health check: `echo 'health_check'` with 5s timeout, skipped if last check < 30s ago
+- Background cleanup loop: every 60 seconds, removes expired sessions
+- `cleanup_sandboxes_for_task()` prioritizes unified sessions first
+
 **App Sandbox Manager** (`backend/app/sandbox/app_sandbox_manager.py`)
-- Unified manager for both E2B and BoxLite providers
+- Manages app development sandboxes (can also delegate to unified manager)
 - Session timeout: 30 minutes (default)
 - Health check: `echo 'health_check'` command with 5-second timeout
 - Health check skip: If last successful check was < 30 seconds ago, skip
@@ -109,6 +122,7 @@ chat_task_id = request.task_id or request.conversation_id or str(uuid.uuid4())
 **Execution Sandbox Manager** (`backend/app/sandbox/execution_sandbox_manager.py`)
 - Manages code execution sandboxes (Python, JS, Bash)
 - Session timeout: 10 minutes (E2B, configurable via `e2b_session_timeout_minutes`)
+- Supports `get_or_create_sandbox_with_runtime()` for sharing a runtime from unified manager
 
 **Desktop Sandbox Manager** (`backend/app/sandbox/desktop_sandbox_manager.py`)
 - Manages browser automation sandboxes
@@ -168,6 +182,49 @@ async def _is_sandbox_healthy(self, session: AppSandboxSession) -> bool:
         session.last_health_check = now
     return healthy
 ```
+
+## Persistent Sandbox Snapshots
+
+**File:** `backend/app/services/snapshot_service.py`
+
+Sandbox state (installed packages, generated files) is preserved across SSE disconnects and timeouts via workspace snapshots.
+
+### How It Works
+
+1. **On disconnect/cleanup**: Execution and app managers call `save_snapshot()` to tar key directories and upload to storage
+2. **On reconnect**: `restore_snapshot()` downloads the latest snapshot and extracts it into the new sandbox runtime
+3. **Storage**: R2 (production) or local filesystem (development), selected via `STORAGE_BACKEND` env var
+4. **Database**: `SandboxSnapshot` model tracks metadata (user_id, task_id, sandbox_type, storage_key, size, expiry)
+
+### Snapshot Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `SNAPSHOT_MAX_SIZE_BYTES` | 100MB | Maximum snapshot archive size |
+| `SNAPSHOT_RETENTION_HOURS` | 24 | How long snapshots are kept |
+| `SNAPSHOT_DEFAULT_PATHS_EXECUTION` | `/home/user`, `/tmp/outputs` | Paths snapshotted for execution sandboxes |
+| `SNAPSHOT_DEFAULT_PATHS_APP` | `/home/user/app` | Paths snapshotted for app sandboxes |
+
+### Snapshot Lifecycle
+
+```
+Save: runtime → tar paths → check size → upload to storage → record in DB
+Restore: find latest snapshot → check expiry → download from storage → extract into runtime
+```
+
+## Cross-Sandbox Handoff Artifacts
+
+**File:** `backend/app/sandbox/artifact_transfer.py`
+
+When agents hand off work (Task → Research), files from the source sandbox can be transferred to the target sandbox.
+
+- `collect_artifacts(runtime, patterns, max_files=10, max_size_mb=50)` — find and upload matching files
+- `restore_artifacts(runtime, artifacts)` — download files into target sandbox
+- `cleanup_artifacts(artifacts)` — remove transferred files from storage after completion
+- `format_artifact_summary(artifacts)` — human-readable summary appended to handoff context
+- Default patterns: `*.py`, `*.csv`, `*.json`, `*.txt`, `*.md`, `*.html`, `*.js`, `*.ts`
+- `HandoffInfo` includes optional `handoff_artifacts` field
+- Supervisor calls `_restore_handoff_artifacts()` during handoff flow
 
 ## Configuration
 
@@ -232,13 +289,14 @@ from app.sandbox import get_sandbox_metrics
 metrics = get_sandbox_metrics()
 # Returns:
 {
-    "execution": {
+    "unified": {
         "active_sessions": int,
         "total_created": int,
         "total_cleaned": int,
         "total_reused": int,
         "health_check_failures": int,
     },
+    "execution": { ... },
     "desktop": { ... },
     "app": { ... },
     "totals": { ... }
@@ -357,22 +415,19 @@ docker ps -a --filter "name=boxlite-" | grep Exited
 
 Potential improvements to consider:
 
-1. **Persistent sandboxes across conversations**
-   - Share sandbox across multiple conversations for same user
-   - Requires namespace isolation
-
-2. **Smart session timeout**
+1. **Smart session timeout**
    - Extend timeout based on usage patterns
    - Proactive cleanup of idle sessions
 
-3. **Sandbox pooling**
+2. **Sandbox pooling**
    - Pre-warm sandbox pool for faster first request
    - Reduced cold start latency (especially for E2B)
 
-4. **Session migration**
-   - Transfer sandbox between conversations
-   - Preserve state when conversation is archived
-
-5. **Hybrid provider support**
+3. **Hybrid provider support**
    - Use BoxLite for development, E2B for production
    - Automatic fallback between providers
+
+Previously planned items that are now implemented:
+- **Unified sandbox per task** — `UnifiedSandboxManager` shares a single runtime across code execution and app development
+- **Persistent snapshots** — Workspace state saved to storage and restored on reconnect
+- **Cross-sandbox handoff** — Files transferred between sandboxes during agent handoffs

@@ -286,7 +286,7 @@ class TestPopulateRegistryFromCatalog:
         fresh_registry = ToolMetadataRegistry()
 
         with (
-            patch("app.agents.tools.tool_search.TOOL_CATALOG", mock_catalog),
+            patch("app.agents.tools.registry.TOOL_CATALOG", mock_catalog),
             patch("app.agents.tools.tool_search._metadata_registry", fresh_registry),
         ):
             populate_registry_from_catalog()
@@ -310,7 +310,7 @@ class TestPopulateRegistryFromCatalog:
         fresh_registry = ToolMetadataRegistry()
 
         with (
-            patch("app.agents.tools.tool_search.TOOL_CATALOG", mock_catalog),
+            patch("app.agents.tools.registry.TOOL_CATALOG", mock_catalog),
             patch("app.agents.tools.tool_search._metadata_registry", fresh_registry),
         ):
             populate_registry_from_catalog()

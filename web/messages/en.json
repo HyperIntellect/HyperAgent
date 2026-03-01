@@ -252,6 +252,7 @@
                 "generate_slides": "Slide Generation",
                 "skill_slide_generation": "Slide Generation",
                 "invoke_skill": "Skill Invocation",
+                "skill_invoke_skill": "Skill Invocation",
                 "list_skills": "List Skills",
                 "ask_user": "User Input",
                 "create_app_project": "Create App Project",
@@ -601,6 +602,7 @@
         "yes": "Yes",
         "no": "No",
         "approveAlways": "Approve all similar actions this session",
+        "noArguments": "No arguments",
         "inputPlaceholder": "Enter your response...",
         "timeoutWarning": "Action will be denied in {seconds} seconds",
         "toolApproval": "Tool Approval Required",
@@ -610,7 +612,14 @@
         "approved": "Approved",
         "denied": "Denied",
         "skipped": "Skipped",
-        "timeout": "Timed out"
+        "timeout": "Timed out",
+        "approvalBrowserNav": "The agent wants to navigate to:\n\n**{url}**\n\nThis will open a browser and access external content.",
+        "approvalBrowserClick": "The agent wants to click **{target}** in the browser.\n\nThis may trigger actions on the current page.",
+        "approvalBrowserType": "The agent wants to type into **{target}** in the browser.\n\nThis may trigger actions on the current page.",
+        "approvalCodeExecution": "The agent wants to execute code in a sandboxed environment.",
+        "approvalFileModify": "The agent wants to modify the file:\n\n**{path}**",
+        "approvalFileDelete": "The agent wants to delete the file:\n\n**{path}**",
+        "approvalGenericTool": "The agent wants to use **{toolName}**."
     },
     "appPreview": {
         "appRunning": "App Running",
@@ -718,13 +727,7 @@
         "statusConnected": "Connected",
         "statusConnecting": "Connecting",
         "statusDisconnected": "Disconnected",
-        "settings": "Settings",
-        "followAgent": "Follow agent",
-        "autoOpen": "Auto-open panel",
-        "on": "On",
-        "off": "Off",
         "terminal": "Terminal",
-        "plan": "Plan",
         "browser": "Browser",
         "files": "Files",
         "close": "Close",
@@ -735,14 +738,7 @@
         "expand": "Expand",
         "terminalOutput": "Terminal output",
         "errorMessage": "An unexpected error occurred in the computer panel.",
-        "usingTerminal": "Agent is using Terminal",
-        "usingPlan": "Agent activity log",
-        "usingBrowser": "Agent is using Browser",
-        "usingFiles": "Agent is browsing files",
         "live": "live",
-        "play": "Play",
-        "pause": "Pause",
-        "playbackSpeed": "Playback speed",
         "previousStep": "Previous step",
         "nextStep": "Next step",
         "goToLive": "Go to live",
@@ -783,9 +779,18 @@
             "typing": "Typing: \"{text}\"",
             "browserAction": "Performing browser action"
         },
+        "taskPlan": "Task Plan",
+        "parallelExecution": "Parallel Execution",
+        "todoChecklist": "Todo Checklist",
         "planInProgress": "In progress...",
         "planProgress": "{completed} of {total} completed",
         "planFailed": "{count} failed",
+        "laneStatus": {
+            "pending": "Pending",
+            "running": "Running",
+            "completed": "Completed",
+            "failed": "Failed"
+        },
         "errorBoundary": {
             "title": "Something went wrong",
             "maxRetries": "Maximum retries reached. Please reload the page.",
@@ -803,7 +808,6 @@
             "hours": "{count}h",
             "days": "{count}d"
         },
-        "splitView": "Split view",
         "sendCommand": "Send command",
         "typeCommand": "Type a command...",
         "editFile": "Edit file",
@@ -831,7 +835,25 @@
             "copied": "Copied",
             "fileCount": "files",
             "folderCount": "folders",
-            "fileTooLarge": "File too large to preview ({size} MB)"
+            "fileTooLarge": "File too large to preview ({size} MB)",
+            "updated": "updated",
+            "fileUpdated": "This file was recently updated",
+            "reload": "Reload"
+        }
+    },
+    "taskPlan": {
+        "executionPlan": "Execution Plan",
+        "steps": "Steps",
+        "stepsCount": "steps",
+        "after": "after {steps}",
+        "successCriteria": "Success Criteria",
+        "potentialChallenges": "Potential Challenges",
+        "questionsToClarify": "Questions to Clarify",
+        "stepComplexity": "{complexity} complexity",
+        "complexity": {
+            "simple": "Simple",
+            "moderate": "Moderate",
+            "complex": "Complex"
         }
     }
 }

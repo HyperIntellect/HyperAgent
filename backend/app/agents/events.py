@@ -78,6 +78,13 @@ class EventType(str, Enum):
     # Parallel execution events
     PARALLEL_TASK = "parallel_task"
 
+    # Task plan overview events (for Task Decomposition & Progress View)
+    PLAN_OVERVIEW = "plan_overview"
+    PLAN_STEP_COMPLETED = "plan_step_completed"
+
+    # Todo-list persistence events (sandbox todo.md updates)
+    TODO_UPDATE = "todo_update"
+
 
 class InterruptType(str, Enum):
     """Types of human-in-the-loop interrupts."""
@@ -85,6 +92,7 @@ class InterruptType(str, Enum):
     DECISION = "decision"  # Multiple choice decision point
     INPUT = "input"  # Free-form text input
     APPROVAL = "approval"  # Yes/no approval for high-risk action
+    CONFIRM = "confirm"  # Yes/no confirmation
 
 
 class StageStatus(str, Enum):
@@ -356,8 +364,11 @@ class VerificationEvent(BaseModel):
 
     type: Literal["verification"] = "verification"
     status: str = Field(..., description="Verification status: passed or failed")
-    message: str = Field(..., description="Verification result message")
+    message: str = Field(default="", description="Verification result message")
     step: int | None = Field(default=None, description="Step number if applicable")
+    step_number: int | None = Field(default=None, description="Canonical step number for clients")
+    findings: list[str] = Field(default_factory=list, description="Machine-readable verification findings")
+    retry_hint: str | None = Field(default=None, description="Suggested retry/adaptation hint")
     timestamp: int = Field(default_factory=_timestamp, description="Event timestamp in ms")
 
 
@@ -384,6 +395,37 @@ class ParallelTaskEvent(BaseModel):
     status: str = Field(..., description="pending, running, completed, failed")
     duration_ms: int | None = Field(default=None, description="Duration in ms")
     timestamp: int = Field(default_factory=_timestamp)
+
+
+class TodoUpdateEvent(BaseModel):
+    """Event containing updated todo.md content from sandbox."""
+
+    type: Literal["todo_update"] = "todo_update"
+    content: str = Field(..., description="Markdown checklist content of the todo file")
+    checked: int = Field(default=0, description="Number of checked items")
+    total: int = Field(default=0, description="Total number of checklist items")
+    timestamp: int = Field(default_factory=_timestamp, description="Event timestamp in ms")
+
+
+class PlanOverviewEvent(BaseModel):
+    """Event containing the full task plan for display in the progress view."""
+
+    type: Literal["plan_overview"] = "plan_overview"
+    steps: list[dict[str, Any]] = Field(..., description="List of plan step objects")
+    total_steps: int = Field(..., description="Total number of steps")
+    completed_steps: int = Field(default=0, description="Number of completed steps")
+    timestamp: int = Field(default_factory=_timestamp, description="Event timestamp in ms")
+
+
+class PlanStepCompletedEvent(BaseModel):
+    """Event indicating a plan step has completed or failed."""
+
+    type: Literal["plan_step_completed"] = "plan_step_completed"
+    step_id: int = Field(..., description="Step index (0-based)")
+    status: str = Field(..., description="completed or failed")
+    completed_steps: int = Field(..., description="Total completed steps so far")
+    total_steps: int = Field(..., description="Total number of steps")
+    timestamp: int = Field(default_factory=_timestamp, description="Event timestamp in ms")
 
 
 class UsageEvent(BaseModel):
@@ -913,8 +955,10 @@ def workspace_update(
 
 def verification(
     status: str,
-    message: str,
+    message: str = "",
     step: int | None = None,
+    findings: list[str] | None = None,
+    retry_hint: str | None = None,
 ) -> dict[str, Any]:
     """Create a verification event dictionary.
 
@@ -930,6 +974,9 @@ def verification(
         status=status,
         message=message,
         step=step,
+        step_number=step,
+        findings=findings or [],
+        retry_hint=retry_hint,
     ).model_dump()
 
 
@@ -986,6 +1033,53 @@ def reasoning(
     ).model_dump()
 
 
+def plan_overview(
+    steps: list[dict[str, Any]],
+    total_steps: int,
+    completed_steps: int = 0,
+) -> dict[str, Any]:
+    """Create a plan overview event dictionary.
+
+    Args:
+        steps: List of plan step objects with id, title, description, status
+        total_steps: Total number of steps
+        completed_steps: Number of completed steps
+
+    Returns:
+        Plan overview event dictionary
+    """
+    return PlanOverviewEvent(
+        steps=steps,
+        total_steps=total_steps,
+        completed_steps=completed_steps,
+    ).model_dump()
+
+
+def plan_step_completed(
+    step_id: int,
+    status: str,
+    completed_steps: int,
+    total_steps: int,
+) -> dict[str, Any]:
+    """Create a plan step completed event dictionary.
+
+    Args:
+        step_id: Step index (0-based)
+        status: Step status (completed or failed)
+        completed_steps: Total completed steps so far
+        total_steps: Total number of steps
+
+    Returns:
+        Plan step completed event dictionary
+    """
+    return PlanStepCompletedEvent(
+        step_id=step_id,
+        status=status,
+        completed_steps=completed_steps,
+        total_steps=total_steps,
+    ).model_dump()
+
+
 def parallel_task(
     task_id: str,
     focus_area: str,
@@ -1011,4 +1105,26 @@ def parallel_task(
         status=status,
         query=query,
         duration_ms=duration_ms,
+    ).model_dump()
+
+
+def todo_update(
+    content: str,
+    checked: int = 0,
+    total: int = 0,
+) -> dict[str, Any]:
+    """Create a todo_update event dictionary.
+
+    Args:
+        content: Markdown checklist content of the todo file
+        checked: Number of checked items
+        total: Total number of checklist items
+
+    Returns:
+        Todo update event dictionary
+    """
+    return TodoUpdateEvent(
+        content=content,
+        checked=checked,
+        total=total,
     ).model_dump()

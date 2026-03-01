@@ -43,6 +43,14 @@ class BoxLiteCodeExecutor(BaseCodeExecutor):
             raise RuntimeError("Sandbox not created. Call create_sandbox() first.")
         return self._runtime
 
+    def set_runtime(self, runtime: SandboxRuntime) -> None:
+        """Set an external SandboxRuntime for this executor.
+
+        Args:
+            runtime: Pre-existing SandboxRuntime to use
+        """
+        self._runtime = runtime
+
     async def create_sandbox(self) -> str:
         self._runtime = await BoxLiteRuntime.create(
             image=self._image,

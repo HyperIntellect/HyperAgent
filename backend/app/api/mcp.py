@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core.logging import get_logger
+from app.agents.policy import PolicyInput, get_policy_engine
 from app.mcp.client import MCPServerConfig
 from app.mcp.registry import connect_server, disconnect_server, get_mcp_client
 
@@ -135,6 +136,7 @@ async def list_mcp_tools():
     client = get_mcp_client()
     tool_infos = client.get_tool_infos()
 
+    engine = get_policy_engine()
     return {
         "tools": [
             {
@@ -142,6 +144,17 @@ async def list_mcp_tools():
                 "description": t.description,
                 "server": t.server_name,
                 "input_schema": t.input_schema,
+                "policy": {
+                    "risk_level": engine.assess_risk(t.name).value,
+                    "default_decision": engine.decide(
+                        PolicyInput(
+                            tool_name=t.name,
+                            tool_args={},
+                            hitl_enabled=True,
+                            risk_threshold="high",
+                        )
+                    ).decision.value,
+                },
             }
             for t in tool_infos
         ],

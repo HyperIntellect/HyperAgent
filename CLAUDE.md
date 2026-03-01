@@ -89,7 +89,7 @@ Zustand stores with persistence to localStorage:
 
 ### Design System
 - **Theme**: Warm stone (light) / Refined ink (dark) with auto mode following system preference
-- **Typography**: Plus Jakarta Sans (display), JetBrains Mono (code) via `next/font/google`, system font fallbacks
+- **Typography**: DM Sans (display), JetBrains Mono (code) via `next/font/google`, system font fallbacks
 - **Color System**: OKLCH-based CSS variables in `app/globals.css` for theme colors, HSL for semantic colors (success, warning, info)
 - **Theme Hook**: `lib/hooks/use-theme.ts` returns `theme` (preference: auto/light/dark), `resolvedTheme` (actual: light/dark), and `setTheme`
 - **Icons**: Lucide React
@@ -194,7 +194,10 @@ HyperAgent uses a **hybrid architecture** with two agents:
 - General-purpose ReAct loop with tool calling
 - Handles ~80% of requests: chat, data analysis, app building, image generation, slide creation, browser automation
 - Dedicated mode bypass: app/image/slide modes directly invoke corresponding skills without LLM routing
-- Supports planned execution via `task_planning` skill
+- Supports planned execution via `task_planning` skill with `plan_overview`/`plan_step_completed` events
+- Todo file persistence: writes execution plan to `/home/user/.hyperagent/todo.md` in sandbox, injects as system context each iteration
+- Anti-repetition: detects consecutive identical tool calls (MD5 hash), injects variation prompts after 3 repeats
+- Optional CodeAct mode: `execute_script` tool with `hyperagent` helper library (gated behind `execution_mode: "codeact"`)
 
 **Research Agent** (`backend/app/agents/subagents/research.py`):
 - Multi-step research: search → analyze → synthesize → write report
@@ -227,12 +230,17 @@ Skills are LangGraph subgraphs invoked as tools using `invoke_skill` and `list_s
 - **E2B** — Cloud sandboxes for code execution, browser automation, app hosting (requires `E2B_API_KEY`)
 - **BoxLite** — Local Docker-based sandboxes (requires Docker)
 - Configured via `SANDBOX_PROVIDER` env var (`e2b` or `boxlite`)
+- **Unified Sandbox Manager** (`backend/app/sandbox/unified_sandbox_manager.py`) — Single shared `SandboxRuntime` per user+task for code execution and app development (desktop stays separate). Session key: `unified:{user_id}:{task_id}`
+- **Persistent Snapshots** (`backend/app/services/snapshot_service.py`) — Workspace snapshots saved to R2/local storage on disconnect, restored on reconnect. Config: `SNAPSHOT_MAX_SIZE_BYTES` (100MB), `SNAPSHOT_RETENTION_HOURS` (24h)
+- **Handoff Artifacts** (`backend/app/sandbox/artifact_transfer.py`) — Files transferred between sandboxes during agent handoffs (max 10 files / 50MB)
 
 **Context Compression:**
 - LLM-based summarization for long conversations
 - Preserves recent messages (configurable, default: 10)
 - Triggers automatically at token threshold (default: 60k)
 - Falls back to truncation if compression fails
+- KV-cache-friendly prompt construction: stable prefix (system prompt + tool schemas) vs dynamic suffix, `prefix_hash` tracking for cache optimization
+- Soft-disable tools via system message instead of removing schemas to preserve prefix stability
 
 **Safety Guardrails:**
 Comprehensive safety scanning at multiple integration points:

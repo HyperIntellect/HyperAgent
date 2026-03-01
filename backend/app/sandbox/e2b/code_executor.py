@@ -53,15 +53,26 @@ class E2BSandboxExecutor(BaseCodeExecutor):
         """Get the sandbox ID."""
         if self.sandbox:
             return self.sandbox.sandbox_id
+        if self._runtime:
+            return self._runtime.sandbox_id
         return None
 
     def get_runtime(self) -> SandboxRuntime:
         """Get the E2BRuntime wrapping the underlying sandbox."""
+        if self._runtime is not None:
+            return self._runtime
         if not self.sandbox:
             raise RuntimeError("Sandbox not created. Call create_sandbox() first.")
-        if self._runtime is None:
-            self._runtime = E2BRuntime(self.sandbox)
+        self._runtime = E2BRuntime(self.sandbox)
         return self._runtime
+
+    def set_runtime(self, runtime: SandboxRuntime) -> None:
+        """Set an external SandboxRuntime for this executor.
+
+        Args:
+            runtime: Pre-existing SandboxRuntime to use
+        """
+        self._runtime = runtime
 
     async def create_sandbox(self) -> str:
         """Create E2B sandbox.

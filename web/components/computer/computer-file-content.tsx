@@ -1,6 +1,10 @@
 "use client";
 
 import React, { useState, useCallback, useEffect } from "react";
+import { useCopyToClipboard } from "@/lib/hooks/use-copy-to-clipboard";
+import { downloadBase64, downloadText } from "@/lib/utils/download";
+import { Badge } from "@/components/ui/badge";
+import { ComputerEmptyState } from "./computer-empty-state";
 import {
     FileText,
     Download,
@@ -45,24 +49,6 @@ interface ComputerFileContentProps {
     className?: string;
 }
 
-/** Download binary content encoded as base64 */
-function downloadBase64(content: string, filename: string, mimeType: string) {
-    const byteChars = atob(content);
-    const byteArray = new Uint8Array(byteChars.length);
-    for (let i = 0; i < byteChars.length; i++) {
-        byteArray[i] = byteChars.charCodeAt(i);
-    }
-    const blob = new Blob([byteArray], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-}
-
 function ContentHeader({
     filename,
     language,
@@ -77,27 +63,12 @@ function ContentHeader({
     onDownload?: () => void;
 }) {
     const t = useTranslations("computer");
-    const [copied, setCopied] = useState(false);
+    const { copied, copy } = useCopyToClipboard(2000);
 
-    const handleCopy = useCallback(async () => {
+    const handleCopy = useCallback(() => {
         if (!content) return;
-        try {
-            await navigator.clipboard.writeText(content);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        } catch {
-            const textarea = document.createElement("textarea");
-            textarea.value = content;
-            textarea.style.position = "fixed";
-            textarea.style.opacity = "0";
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand("copy");
-            document.body.removeChild(textarea);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        }
-    }, [content]);
+        copy(content);
+    }, [content, copy]);
 
     const handleDownload = useCallback(() => {
         if (!content || !filename) return;
@@ -108,20 +79,12 @@ function ContentHeader({
         if (isBinary) {
             downloadBase64(content, filename, getMimeType(filename));
         } else {
-            const blob = new Blob([content], { type: "text/plain" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            downloadText(content, filename);
         }
     }, [content, filename, isBinary, onDownload]);
 
     const icon = language ? (
-        <FileCode className="w-3.5 h-3.5 text-amber-500" />
+        <FileCode className="w-3.5 h-3.5 text-muted-foreground" />
     ) : (
         <FileText className="w-3.5 h-3.5 text-muted-foreground" />
     );
@@ -134,9 +97,7 @@ function ContentHeader({
                     {filename}
                 </span>
                 {language && (
-                    <span className="text-[10px] uppercase tracking-wider font-bold text-primary/70 bg-primary/10 px-1.5 py-0.5 rounded">
-                        {language}
-                    </span>
+                    <Badge variant="subtle">{language}</Badge>
                 )}
             </div>
             <div className="flex items-center gap-0.5">
@@ -144,12 +105,12 @@ function ContentHeader({
                     <Button
                         variant="ghost"
                         size="icon"
-                        className="h-6 w-6"
+                        className="h-8 w-8"
                         onClick={handleCopy}
                         title={copied ? t("workspace.copied") : t("workspace.copyContent")}
                     >
                         {copied ? (
-                            <Check className="w-3.5 h-3.5 text-green-500" />
+                            <Check className="w-3.5 h-3.5 text-primary" />
                         ) : (
                             <Copy className="w-3.5 h-3.5" />
                         )}
@@ -159,7 +120,7 @@ function ContentHeader({
                     <Button
                         variant="ghost"
                         size="icon"
-                        className="h-6 w-6"
+                        className="h-8 w-8"
                         onClick={handleDownload}
                         title={t("workspace.download")}
                     >
@@ -219,12 +180,11 @@ export function ComputerFileContent({
     // No content state
     if (content === null) {
         return (
-            <div className={cn("flex flex-col items-center justify-center h-full py-12", className)}>
-                <div className="w-12 h-12 rounded-xl bg-secondary/50 flex items-center justify-center mb-3">
-                    <FileSearch className="w-6 h-6 text-muted-foreground/40" />
-                </div>
-                <p className="text-sm text-muted-foreground">{t("workspace.selectFile")}</p>
-            </div>
+            <ComputerEmptyState
+                icon={FileSearch}
+                title={t("workspace.selectFile")}
+                className={cn("h-full", className)}
+            />
         );
     }
 
@@ -243,7 +203,7 @@ export function ComputerFileContent({
                     />
                     <button
                         onClick={() => setIsFullscreen(true)}
-                        className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-lg bg-background/80 border border-border/50 hover:bg-secondary"
+                        className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-lg bg-background/80 border border-border/50 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                         title={t("fullscreen")}
                     >
                         <Maximize2 className="w-4 h-4" />
@@ -254,17 +214,7 @@ export function ComputerFileContent({
                         src={dataUri}
                         filename={filename}
                         onClose={() => setIsFullscreen(false)}
-                        onDownload={() => {
-                            const blob = new Blob([content], { type: "image/svg+xml" });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement("a");
-                            a.href = url;
-                            a.download = filename;
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            URL.revokeObjectURL(url);
-                        }}
+                        onDownload={() => downloadText(content, filename, "image/svg+xml")}
                     />
                 )}
             </div>
@@ -368,7 +318,7 @@ export function ComputerFileContent({
                     />
                     <button
                         onClick={() => setIsFullscreen(true)}
-                        className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-lg bg-background/80 border border-border/50 hover:bg-secondary"
+                        className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-lg bg-background/80 border border-border/50 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                         title={t("fullscreen")}
                     >
                         <Maximize2 className="w-4 h-4" />
@@ -396,15 +346,13 @@ export function ComputerFileContent({
                         <span className="text-xs font-mono text-muted-foreground truncate max-w-[240px]">
                             {filename}
                         </span>
-                        <span className="text-[10px] uppercase tracking-wider font-bold text-primary/70 bg-primary/10 px-1.5 py-0.5 rounded">
-                            markdown
-                        </span>
+                        <Badge variant="subtle">markdown</Badge>
                     </div>
                     <div className="flex items-center gap-0.5">
                         <Button
                             variant="ghost"
                             size="icon"
-                            className={cn("h-6 w-6", markdownMode === "preview" && "bg-primary/10 text-primary")}
+                            className={cn("h-8 w-8", markdownMode === "preview" && "bg-primary/10 text-primary")}
                             onClick={() => setMarkdownMode("preview")}
                             title={t("workspace.preview")}
                         >
@@ -413,7 +361,7 @@ export function ComputerFileContent({
                         <Button
                             variant="ghost"
                             size="icon"
-                            className={cn("h-6 w-6", markdownMode === "raw" && "bg-primary/10 text-primary")}
+                            className={cn("h-8 w-8", markdownMode === "raw" && "bg-primary/10 text-primary")}
                             onClick={() => setMarkdownMode("raw")}
                             title="Raw"
                         >
@@ -422,18 +370,8 @@ export function ComputerFileContent({
                         <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6"
-                            onClick={() => {
-                                const blob = new Blob([content], { type: "text/plain" });
-                                const url = URL.createObjectURL(blob);
-                                const a = document.createElement("a");
-                                a.href = url;
-                                a.download = filename;
-                                document.body.appendChild(a);
-                                a.click();
-                                document.body.removeChild(a);
-                                URL.revokeObjectURL(url);
-                            }}
+                            className="h-8 w-8"
+                            onClick={() => downloadText(content, filename)}
                             title={t("workspace.download")}
                         >
                             <Download className="w-3.5 h-3.5" />
@@ -598,19 +536,17 @@ function BinaryDownloadFallback({
     }, [content, filename]);
 
     return (
-        <div className={cn("flex flex-col items-center justify-center h-full py-12", className)}>
-            <div className="w-12 h-12 rounded-xl bg-secondary/50 flex items-center justify-center mb-4">
-                <FileText className="w-6 h-6 text-muted-foreground/50" />
-            </div>
-            <p className="text-sm font-medium mb-2">{filename}</p>
-            <p className="text-xs text-muted-foreground mb-4">
-                {message || t("workspace.noPreview")}
-            </p>
-            <Button variant="outline" size="sm" onClick={handleDownload}>
+        <ComputerEmptyState
+            icon={FileText}
+            title={filename}
+            subtitle={message || t("workspace.noPreview")}
+            className={cn("h-full", className)}
+        >
+            <Button variant="outline" size="sm" onClick={handleDownload} className="mt-4">
                 <Download className="w-4 h-4 mr-2" />
                 {t("workspace.download")}
             </Button>
-        </div>
+        </ComputerEmptyState>
     );
 }
 
@@ -693,13 +629,13 @@ function FullscreenModal({
                                 e.stopPropagation();
                                 onDownload();
                             }}
-                            className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-secondary/60 hover:bg-secondary transition-colors"
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-secondary/60 hover:bg-secondary transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                         >
                             <Download className="w-4 h-4" />
                         </button>
                         <button
                             onClick={onClose}
-                            className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-muted hover:bg-muted/80 transition-colors"
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-muted hover:bg-muted/80 transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                         >
                             <X className="w-4 h-4" />
                         </button>

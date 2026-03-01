@@ -30,7 +30,6 @@ import { useComputerStore } from "@/lib/stores/computer-store";
 import { usePreviewStore } from "@/lib/stores/preview-store";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { FileUploadButton } from "@/components/chat/file-upload-button";
-import { VoiceInputButton } from "@/components/chat/voice-input-button";
 import { AttachmentPreview } from "@/components/chat/attachment-preview";
 import { Button } from "@/components/ui/button";
 import { CostIndicator } from "@/components/ui/cost-indicator";
@@ -418,6 +417,7 @@ export function ChatInterface() {
         smartOpen: smartOpenComputer,
         setWorkspaceContext,
         handleWorkspaceUpdate,
+        refreshFiles,
         openWorkspacePanel,
         setActiveConversation: setComputerActiveConversation,
         getWorkspaceSandboxId,
@@ -499,6 +499,26 @@ export function ChatInterface() {
             }
         }
     }, [activeConversationId, hasHydrated, activeProgress, clearAgentProgress]);
+
+    // Abort in-flight streaming and reset state when switching conversations
+    useEffect(() => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+        // Reset streaming UI state for the new conversation context
+        flushTokenBatch();
+        setStreamingContent("");
+        streamingContentRef.current = "";
+        setStreamingEvents([]);
+        setStreamingSources([]);
+        setStreamingAgentType(undefined);
+        setActiveInterrupt(null);
+        setLoading(false);
+        setStreaming(false);
+        endAgentProgress();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeConversationId]);
 
     const scrollToBottomRef = useRef<number | null>(null);
     const scrollToBottom = useCallback(() => {
@@ -898,6 +918,9 @@ export function ChatInterface() {
                                 // Update file tree
                                 handleWorkspaceUpdate(workspaceEvent);
 
+                                // Auto-refresh file view with debounce + highlight changed paths
+                                refreshFiles([workspaceEvent.path]);
+
                                 // Smart-open panel on file creation or modification
                                 if (workspaceEvent.operation === "create" || workspaceEvent.operation === "modify") {
                                     smartOpenComputer("file", true);
@@ -916,6 +939,8 @@ export function ChatInterface() {
                                     timestamp: (event.timestamp as number | undefined) ?? Date.now(),
                                 };
                                 setActiveInterrupt(interruptEvent);
+                                addStreamingEvent(event);
+                            } else if (event.type === "usage") {
                                 addStreamingEvent(event);
                             } else if (event.type === "error") {
                                 const errorData = typeof event.data === "string" ? event.data : "Unknown error";
@@ -1247,6 +1272,9 @@ export function ChatInterface() {
                                 // Update file tree
                                 handleWorkspaceUpdate(workspaceEvent);
 
+                                // Auto-refresh file view with debounce + highlight changed paths
+                                refreshFiles([workspaceEvent.path]);
+
                                 // Smart-open panel on file creation or modification
                                 if (workspaceEvent.operation === "create" || workspaceEvent.operation === "modify") {
                                     smartOpenComputer("file", true);
@@ -1265,6 +1293,8 @@ export function ChatInterface() {
                                     timestamp: (event.timestamp as number | undefined) ?? Date.now(),
                                 };
                                 setActiveInterrupt(interruptEvent);
+                                addStreamingEvent(event);
+                            } else if (event.type === "usage") {
                                 addStreamingEvent(event);
                             } else if (event.type === "error") {
                                 const errorData = typeof event.data === "string" ? event.data : "Unknown error";
@@ -1366,18 +1396,6 @@ export function ChatInterface() {
 
     const handleRegenerate = useCallback((messageId: string) => {
         handleRegenerateRef.current?.(messageId);
-    }, []);
-
-    const handleVoiceTranscription = useCallback((text: string) => {
-        // Append transcribed text to existing input, separated by space if needed
-        setInput((prev) => {
-            if (prev.trim()) {
-                return `${prev.trim()} ${text}`;
-            }
-            return text;
-        });
-        // Focus the input after transcription
-        inputRef.current?.focus();
     }, []);
 
     // Handle interrupt response (HITL)
@@ -1521,21 +1539,22 @@ export function ChatInterface() {
             <div
                 className={cn(
                     "flex flex-col",
-                    hasMessages ? "border-t border-border bg-background" : "flex-1 items-center justify-center"
+                    hasMessages ? "bg-background/80 pb-2" : "flex-1 items-center justify-center"
                 )}
             >
                 <div
                     className={cn(
                         "w-full",
-                        hasMessages ? "max-w-4xl mx-auto px-4 md:px-6 py-4 md:py-6" : "max-w-3xl px-6 md:px-8"
+                        hasMessages ? "max-w-4xl mx-auto px-4 md:px-6 py-3 md:py-4" : "max-w-2xl px-6 md:px-8"
                     )}
                 >
                     {/* Welcome section - clean and minimal */}
                     {!hasMessages && (
-                        <div className="text-center mb-8">
-                            <p
-                                className="text-muted-foreground text-base md:text-lg leading-relaxed max-w-md mx-auto"
-                            >
+                        <div className="text-center mb-10">
+                            <h2 className="text-2xl md:text-3xl font-semibold text-foreground mb-3 tracking-tight">
+                                {t("welcomeTitle")}
+                            </h2>
+                            <p className="text-muted-foreground text-sm md:text-base leading-relaxed max-w-sm mx-auto">
                                 {t("welcomeSubtitle")}
                             </p>
                         </div>
@@ -1544,7 +1563,10 @@ export function ChatInterface() {
                     {/* Input - clean and focused */}
                     <div className="relative">
                         <div className={cn(
-                            "relative flex flex-col bg-card rounded-xl border border-border focus-within:border-foreground/20 transition-colors"
+                            "relative flex flex-col bg-card rounded-2xl border transition-all",
+                            hasMessages
+                                ? "border-border focus-within:border-foreground/15"
+                                : "border-border/70 shadow-sm focus-within:shadow-md"
                         )}>
                             {/* Attachment preview */}
                             <AttachmentPreview
@@ -1561,10 +1583,10 @@ export function ChatInterface() {
                                     onChange={(e) => setInput(e.target.value)}
                                     placeholder={getPlaceholder()}
                                     className={cn(
-                                        "flex-1 bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none leading-relaxed textarea-auto-resize resize-none",
+                                        "flex-1 bg-transparent text-foreground placeholder:text-muted-foreground/60 focus:outline-none leading-relaxed textarea-auto-resize resize-none",
                                         hasMessages
-                                            ? "min-h-[56px] max-h-[140px] px-4 py-3 text-sm"
-                                            : "min-h-[80px] md:min-h-[96px] max-h-[180px] px-4 py-4 text-sm"
+                                            ? "min-h-[48px] max-h-[140px] px-4 py-3 text-sm"
+                                            : "min-h-[72px] md:min-h-[88px] max-h-[180px] px-5 py-4 md:py-5 text-base"
                                     )}
                                     rows={hasMessages ? 2 : 3}
                                     onKeyDown={(e) => {
@@ -1576,27 +1598,21 @@ export function ChatInterface() {
                                 />
                             </div>
 
-                            {/* Bottom bar with plus button, voice input, model selector, hint and send button */}
-                            <div className="flex items-center justify-between px-2 md:px-3 py-2 border-t border-border/50">
+                            {/* Bottom bar with plus button, model selector, hint and send button */}
+                            <div className="flex items-center justify-between px-3 md:px-4 pb-3 pt-1">
                                 <div className="flex items-center gap-2">
-                                    <div className="flex items-center gap-1">
-                                        <FileUploadButton
-                                            onFilesSelected={addFiles}
-                                            onSourceSelect={handleSourceSelect}
-                                            disabled={isProcessing || isUploading}
-                                        />
-                                        <VoiceInputButton
-                                            onTranscription={handleVoiceTranscription}
-                                            disabled={isProcessing || isUploading}
-                                        />
-                                    </div>
+                                    <FileUploadButton
+                                        onFilesSelected={addFiles}
+                                        onSourceSelect={handleSourceSelect}
+                                        disabled={isProcessing || isUploading}
+                                    />
 
                                     {/* Model tier selector */}
                                     <div ref={modelMenuRef} className="relative">
                                         <button
                                             onClick={() => setShowModelMenu(!showModelMenu)}
                                             className={cn(
-                                                "flex items-center gap-1 px-2 py-1 rounded-md",
+                                                "flex items-center gap-1 px-2 py-1 rounded-full",
                                                 "text-xs font-medium transition-colors",
                                                 "cursor-pointer",
                                                 "hover:bg-secondary",
@@ -1605,7 +1621,7 @@ export function ChatInterface() {
                                                     : "text-muted-foreground"
                                             )}
                                         >
-                                            <Sparkles className="w-3.5 h-3.5" />
+                                            <Sparkles className="w-3 h-3" />
                                             <span>{tier === "auto" ? tSettings("autoTier") : tier.charAt(0).toUpperCase() + tier.slice(1)}</span>
                                             <ChevronDown className="w-3 h-3" />
                                         </button>
@@ -1650,7 +1666,7 @@ export function ChatInterface() {
                                     {allUsageEvents.length > 0 && hasMessages ? (
                                         <CostIndicator events={allUsageEvents} />
                                     ) : (
-                                        <p className="text-xs text-muted-foreground hidden md:block">
+                                        <p className="text-xs text-muted-foreground/70 hidden md:block">
                                             {attachments.length > 0
                                                 ? tChat("filesAttached", { count: attachments.length })
                                                 : tChat("pressEnterToSend")}
@@ -1662,11 +1678,12 @@ export function ChatInterface() {
                                     disabled={isUploading || (!isProcessing && !input.trim())}
                                     variant={isProcessing ? "destructive" : (input.trim() && !isUploading ? "primary" : "default")}
                                     size="icon"
+                                    className="rounded-full h-8 w-8"
                                 >
                                     {isProcessing ? (
-                                        <Square className="w-4 h-4 fill-current" />
+                                        <Square className="w-3.5 h-3.5 fill-current" />
                                     ) : (
-                                        <Send className="w-4 h-4" />
+                                        <Send className="w-3.5 h-3.5" />
                                     )}
                                 </Button>
                             </div>
@@ -1675,7 +1692,7 @@ export function ChatInterface() {
 
                     {/* Agent selection - minimal pills (only on home view) */}
                     {!hasMessages && (
-                        <div className="mt-6">
+                        <div className="mt-5">
                             <div className="flex items-center justify-center gap-2 flex-wrap">
                                 {AGENT_KEYS.map((agent) => {
                                     const isSelected = selectedAgent === agent || (agent === "research" && selectedScenario);
@@ -1685,11 +1702,11 @@ export function ChatInterface() {
                                                 onClick={() => handleAgentSelect(agent)}
                                                 onMouseEnter={() => agent === "research" && setShowResearchSubmenu(true)}
                                                 className={cn(
-                                                    "relative flex items-center gap-2 px-3 py-2 rounded-lg transition-colors",
+                                                    "relative flex items-center gap-2 px-3.5 py-2 rounded-full transition-colors",
                                                     "text-sm font-medium",
                                                     isSelected
                                                         ? "bg-primary text-primary-foreground"
-                                                        : "bg-secondary text-muted-foreground hover:text-foreground"
+                                                        : "bg-secondary/70 text-muted-foreground hover:bg-secondary hover:text-foreground"
                                                 )}
                                             >
                                                 {/* Selection checkmark */}

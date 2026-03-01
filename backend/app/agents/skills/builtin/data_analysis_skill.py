@@ -314,6 +314,11 @@ class DataAnalysisSkill(Skill):
             "generate_image",
             "analyze_image",
         ],
+        risk_level="high",
+        side_effect_level="high",
+        data_sensitivity="sensitive",
+        network_scope="sandbox_only",
+        idempotency_hint=False,
         max_execution_time_seconds=600,
         max_iterations=20,
         tags=[

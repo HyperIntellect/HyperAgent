@@ -17,6 +17,7 @@ from app.agents.events import VerificationEvent
 from app.agents.state import TaskState
 from app.agents.subagents.task import (
     act_node,
+    should_adapt_or_finalize,
     should_continue,
     verify_node,
 )
@@ -441,6 +442,7 @@ class TestVerifyNode:
         verification_events = [e for e in result["events"] if e.get("type") == "verification"]
         assert len(verification_events) == 1
         assert verification_events[0]["status"] == "passed"
+        assert "findings" in verification_events[0]
 
     @pytest.mark.asyncio
     async def test_emits_failed_event(self, sample_plan_steps):
@@ -470,6 +472,9 @@ class TestVerifyNode:
         assert len(verification_events) == 1
         assert verification_events[0]["status"] == "failed"
         assert "missing" in verification_events[0]["message"].lower()
+        assert result["verification_status"] == "failed"
+        assert result["verification_attempts"] == 1
+        assert result["execution_plan"] == []
 
     @pytest.mark.asyncio
     async def test_handles_llm_error(self, sample_plan_steps):
@@ -494,6 +499,35 @@ class TestVerifyNode:
         verification_events = [e for e in result["events"] if e.get("type") == "verification"]
         assert len(verification_events) == 1
         assert verification_events[0]["status"] == "error"
+        assert result["verification_status"] == "error"
+
+
+class TestVerificationAdaptationRouting:
+    """Tests for post-verification routing behavior."""
+
+    def test_finalize_when_verification_passed(self):
+        state: TaskState = {"verification_status": "passed", "verification_attempts": 0}
+        assert should_adapt_or_finalize(state) == "finalize"
+
+    def test_route_to_reason_on_first_failure(self):
+        state: TaskState = {"verification_status": "failed", "verification_attempts": 1}
+        assert should_adapt_or_finalize(state) == "reason"
+
+    def test_finalize_after_attempt_limit_auto_mode(self):
+        state: TaskState = {
+            "verification_status": "failed",
+            "verification_attempts": 2,
+            "execution_mode": "auto",
+        }
+        assert should_adapt_or_finalize(state) == "finalize"
+
+    def test_strict_mode_allows_only_single_attempt(self):
+        state: TaskState = {
+            "verification_status": "partial",
+            "verification_attempts": 1,
+            "execution_mode": "strict",
+        }
+        assert should_adapt_or_finalize(state) == "finalize"
 
     @pytest.mark.asyncio
     async def test_uses_flash_tier(self, sample_plan_steps):

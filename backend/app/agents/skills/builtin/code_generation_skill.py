@@ -99,6 +99,11 @@ class CodeGenerationSkill(ToolSkill):
             },
         },
         required_tools=[],
+        risk_level="low",
+        side_effect_level="none",
+        data_sensitivity="internal",
+        network_scope="none",
+        idempotency_hint=True,
         max_iterations=2,
         tags=["code", "programming", "generation", "development"],
     )

@@ -93,7 +93,7 @@ const config: Config = {
       },
       fontFamily: {
         sans: [
-          "var(--font-plus-jakarta-sans)",
+          "var(--font-dm-sans)",
           "system-ui",
           "-apple-system",
           "BlinkMacSystemFont",
@@ -101,7 +101,7 @@ const config: Config = {
           "sans-serif",
         ],
         display: [
-          "var(--font-plus-jakarta-sans)",
+          "var(--font-dm-sans)",
           "system-ui",
           "sans-serif",
         ],

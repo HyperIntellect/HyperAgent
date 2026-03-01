@@ -89,6 +89,7 @@ class LLMService:
             api_key=settings.anthropic_api_key,
             model=model or settings.tier_pro_anthropic,
             streaming=True,
+            stream_usage=True,
             timeout=float(settings.llm_request_timeout),
             max_retries=settings.llm_max_retries,
         )
@@ -101,6 +102,7 @@ class LLMService:
             api_key=settings.openai_api_key,
             model=model or settings.tier_pro_openai,
             streaming=True,
+            stream_usage=True,
             request_timeout=float(settings.llm_request_timeout),
             max_retries=settings.llm_max_retries,
         )

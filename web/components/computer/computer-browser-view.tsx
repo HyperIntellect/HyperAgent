@@ -11,16 +11,34 @@ import {
     Minimize2,
     ExternalLink,
     Lock,
+    MousePointer2,
+    Keyboard,
+    ArrowUpDown,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { useComputerStore } from "@/lib/stores/computer-store";
 import type { ComputerStreamInfo } from "@/lib/stores/agent-progress-store";
 import { Button } from "@/components/ui/button";
+import { ComputerEmptyState } from "./computer-empty-state";
 
 interface ComputerBrowserViewProps {
     stream: ComputerStreamInfo | null;
     className?: string;
+}
+
+function getActionIcon(description: string) {
+    const lower = description.toLowerCase();
+    if (lower.includes("click") || lower.includes("tap") || lower.includes("press")) {
+        return <MousePointer2 className="w-3 h-3 flex-shrink-0" />;
+    }
+    if (lower.includes("type") || lower.includes("input") || lower.includes("enter") || lower.includes("fill")) {
+        return <Keyboard className="w-3 h-3 flex-shrink-0" />;
+    }
+    if (lower.includes("scroll")) {
+        return <ArrowUpDown className="w-3 h-3 flex-shrink-0" />;
+    }
+    return null;
 }
 
 export function ComputerBrowserView({
@@ -81,36 +99,48 @@ export function ComputerBrowserView({
 
     if (!stream) {
         return (
-            <div className={cn(
-                "flex-1 flex flex-col items-center justify-center gap-3",
-                "bg-secondary/30 text-muted-foreground",
-                className
-            )}>
-                <Monitor className="w-12 h-12 text-muted-foreground/40" />
-                <div className="text-center">
-                    <p className="text-sm font-medium">{t("noBrowserStream")}</p>
-                    <p className="text-xs text-muted-foreground/60 mt-1">
-                        {t("browserStreamWillAppear")}
-                    </p>
-                </div>
-            </div>
+            <ComputerEmptyState
+                icon={Monitor}
+                title={t("noBrowserStream")}
+                subtitle={t("browserStreamWillAppear")}
+                className={cn("bg-secondary/30", className)}
+            />
         );
     }
+
+    // Extract click coordinates from action if available (may be present in extended action data)
+    const actionData = visibleAction as Record<string, unknown> | null;
+    const clickCoords = actionData && typeof actionData.x === "number" && typeof actionData.y === "number"
+        ? { x: actionData.x as number, y: actionData.y as number }
+        : undefined;
 
     // Action overlay toast
     const actionOverlay = visibleAction ? (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 max-w-[80%]">
             <div className={cn(
                 "flex items-center gap-2 px-3 py-1.5 rounded-lg",
-                "bg-background/95 border border-border/50 shadow-sm",
+                "bg-background/95 border border-border",
                 "animate-in fade-in slide-in-from-bottom-2 duration-200"
             )}>
+                {getActionIcon(visibleAction.description || "")}
                 <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse flex-shrink-0" />
                 <span className="text-xs text-foreground truncate">
                     {visibleAction.description}
                 </span>
             </div>
         </div>
+    ) : null;
+
+    // Click position indicator
+    const clickIndicator = visibleAction && clickCoords ? (
+        <div
+            className="absolute z-10 bg-primary/30 rounded-full w-8 h-8 pointer-events-none animate-ping"
+            style={{
+                left: `${clickCoords.x}%`,
+                top: `${clickCoords.y}%`,
+                transform: "translate(-50%, -50%)",
+            }}
+        />
     ) : null;
 
     // Use a single container with CSS-based fullscreen toggle to avoid
@@ -134,7 +164,11 @@ export function ComputerBrowserView({
                 <Button
                     variant="ghost"
                     size="icon"
-                    className={cn("h-6 w-6 cursor-default", isFullscreen ? "text-muted-foreground/60" : "text-muted-foreground/50")}
+                    className={cn(
+                        "h-8 w-8 cursor-default opacity-50",
+                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                        isFullscreen ? "text-muted-foreground/60" : "text-muted-foreground/50"
+                    )}
                     disabled
                     title={t("browserBack")}
                 >
@@ -143,7 +177,11 @@ export function ComputerBrowserView({
                 <Button
                     variant="ghost"
                     size="icon"
-                    className={cn("h-6 w-6 cursor-default", isFullscreen ? "text-muted-foreground/60" : "text-muted-foreground/50")}
+                    className={cn(
+                        "h-8 w-8 cursor-default opacity-50",
+                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                        isFullscreen ? "text-muted-foreground/60" : "text-muted-foreground/50"
+                    )}
                     disabled
                     title={t("browserForward")}
                 >
@@ -153,7 +191,8 @@ export function ComputerBrowserView({
                     variant="ghost"
                     size="icon"
                     className={cn(
-                        "h-6 w-6 cursor-default",
+                        "h-8 w-8 cursor-default opacity-50",
+                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
                         isFullscreen ? "text-muted-foreground/60" : "text-muted-foreground/50",
                         browserIsNavigating && "animate-spin"
                     )}
@@ -165,17 +204,17 @@ export function ComputerBrowserView({
 
                 {/* URL bar */}
                 <div className={cn(
-                    "flex-1 flex items-center gap-1.5 h-7 px-2.5 rounded-md min-w-0",
+                    "flex-1 flex items-center gap-1.5 h-7 px-2.5 rounded-lg min-w-0 transition-colors",
                     isFullscreen
-                        ? "bg-accent/50 border border-border"
-                        : "bg-background/80 border border-border/40"
+                        ? "bg-accent/50 border border-border focus-within:border-primary/50"
+                        : "bg-background/80 border border-border/40 focus-within:border-primary/50"
                 )}>
                     {displayUrl ? (
                         <>
                             {isHttps ? (
-                                <Lock className={cn("w-3 h-3 flex-shrink-0", isFullscreen ? "text-muted-foreground/60" : "text-muted-foreground/60")} />
+                                <Lock className={cn("w-3 h-3 flex-shrink-0", "text-muted-foreground/60")} />
                             ) : (
-                                <Globe className={cn("w-3 h-3 flex-shrink-0", isFullscreen ? "text-muted-foreground/60" : "text-muted-foreground/60")} />
+                                <Globe className={cn("w-3 h-3 flex-shrink-0", "text-muted-foreground/60")} />
                             )}
                             <span className={cn("text-xs truncate", isFullscreen ? "text-muted-foreground" : "text-muted-foreground select-all")}>
                                 {displayUrl}
@@ -183,8 +222,8 @@ export function ComputerBrowserView({
                         </>
                     ) : (
                         <>
-                            <Globe className={cn("w-3 h-3 flex-shrink-0", isFullscreen ? "text-muted-foreground/40" : "text-muted-foreground/40")} />
-                            <span className={cn("text-xs truncate", isFullscreen ? "text-muted-foreground/40" : "text-muted-foreground/40")}>
+                            <Globe className="w-3 h-3 flex-shrink-0 text-muted-foreground/40" />
+                            <span className="text-xs truncate text-muted-foreground/40">
                                 {t("browserUrlPlaceholder")}
                             </span>
                         </>
@@ -192,17 +231,14 @@ export function ComputerBrowserView({
                 </div>
 
                 {/* Right-side controls */}
-                {/* Semantic live status color - intentionally green */}
+                {/* Live indicator - uses primary color */}
                 {isLive && stream && (
                     <div className={cn(
                         "flex items-center gap-0.5 px-1.5 py-0.5 rounded-full",
-                        isFullscreen ? "bg-green-500/20" : "bg-green-500/10 border border-green-500/20"
+                        "bg-primary/10 border border-primary/20"
                     )}>
-                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                        <span className={cn(
-                            "text-[10px] font-medium",
-                            isFullscreen ? "text-green-400" : "text-green-600 dark:text-green-400"
-                        )}>
+                        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                        <span className="text-xs font-medium text-primary">
                             {t("browserLive")}
                         </span>
                     </div>
@@ -211,7 +247,11 @@ export function ComputerBrowserView({
                 <Button
                     variant="ghost"
                     size="icon"
-                    className={cn("h-6 w-6", isFullscreen && "text-foreground hover:bg-accent")}
+                    className={cn(
+                        "h-8 w-8",
+                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                        isFullscreen && "text-foreground hover:bg-accent"
+                    )}
                     onClick={handleScreenshot}
                     title={t("openInNewTab")}
                     aria-label={t("openInNewTab")}
@@ -221,7 +261,11 @@ export function ComputerBrowserView({
                 <Button
                     variant="ghost"
                     size="icon"
-                    className={cn("h-6 w-6", isFullscreen && "text-foreground hover:bg-accent")}
+                    className={cn(
+                        "h-8 w-8",
+                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                        isFullscreen && "text-foreground hover:bg-accent"
+                    )}
                     onClick={() => setIsFullscreen(!isFullscreen)}
                     title={isFullscreen ? t("browserExitFullscreen") : t("browserFullscreen")}
                     aria-label={isFullscreen ? t("browserExitFullscreen") : t("browserFullscreen")}
@@ -254,6 +298,7 @@ export function ComputerBrowserView({
                     onLoad={() => handleIframeLoad(iframeRef)}
                     title={t("browserIframeTitle")}
                 />
+                {clickIndicator}
                 {actionOverlay}
             </div>
         </div>

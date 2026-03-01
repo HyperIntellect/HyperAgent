@@ -1,4 +1,4 @@
-.PHONY: help install install-web install-backend dev dev-web dev-backend dev-worker dev-worker-watch dev-worker-burst dev-worker-high dev-all build build-web start-web lint lint-web lint-backend format-backend type-check test test-backend clean migrate migrate-down migrate-new migrate-status health queue-stats queue-monitor queue-list queue-clear queue-health queue-test eval eval-routing eval-tools eval-quality eval-langsmith sandbox-pull-images
+.PHONY: help install install-web install-backend dev dev-web dev-backend dev-worker dev-worker-watch dev-worker-burst dev-worker-high dev-all build build-web start-web lint lint-web lint-backend format-backend type-check test test-backend clean migrate migrate-down migrate-new migrate-status health queue-stats queue-monitor queue-list queue-clear queue-health queue-test eval eval-routing eval-tools eval-quality eval-langsmith sandbox-pull-images sandbox-build-app-image
 
 # Colors
 CYAN := \033[36m
@@ -228,6 +228,10 @@ queue-test: ## Submit a test task to verify worker is processing
 sandbox-pull-images: ## Pull all Docker images required by BoxLite local sandbox
 	@echo "$(CYAN)Pulling BoxLite Docker images...$(RESET)"
 	cd backend && python3 scripts/pull_boxlite_images.py
+
+sandbox-build-app-image: ## Build the pre-cached app sandbox Docker image
+	@echo "$(CYAN)Building app sandbox image with pre-cached templates...$(RESET)"
+	docker build -f backend/docker/app-sandbox.Dockerfile -t hyperagent/app-sandbox:latest backend/docker/
 
 # Default target
 .DEFAULT_GOAL := help

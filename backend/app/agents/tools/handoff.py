@@ -12,7 +12,7 @@ This module consolidates all handoff-related functionality:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
@@ -43,6 +43,7 @@ class HandoffInfo(TypedDict, total=False):
     target_agent: str  # Agent to transfer control to
     task_description: str  # What the target agent should do
     context: str  # Additional context for the handoff
+    handoff_artifacts: NotRequired[list[dict[str, Any]]]  # [{path, storage_key, size}]
 
 
 class SharedAgentMemory(TypedDict, total=False):
@@ -441,6 +442,7 @@ def build_query_with_context(
     delegated_task: str | None = None,
     handoff_context: str | None = None,
     shared_memory: SharedAgentMemory | None = None,
+    artifact_summary: str | None = None,
 ) -> str:
     """Build query string with handoff context if present.
 
@@ -452,6 +454,7 @@ def build_query_with_context(
         delegated_task: Task description from handoff
         handoff_context: Additional context from handoff
         shared_memory: Shared memory from previous agents
+        artifact_summary: Summary of transferred sandbox artifacts
 
     Returns:
         Query string with optional context
@@ -462,6 +465,9 @@ def build_query_with_context(
         result = delegated_task
         if handoff_context:
             result = f"{result}\n\nContext: {handoff_context}"
+
+    if artifact_summary:
+        result = f"{result}\n\n{artifact_summary}"
 
     # Include shared memory context if available (with dynamic truncation)
     if shared_memory:

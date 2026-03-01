@@ -40,9 +40,9 @@ function getToolIcon(toolName: string) {
 }
 
 // Format tool arguments for display
-function formatToolArgs(args: Record<string, unknown>): string {
+function formatToolArgs(args: Record<string, unknown>, noArgsLabel: string): string {
     const entries = Object.entries(args);
-    if (entries.length === 0) return "No arguments";
+    if (entries.length === 0) return noArgsLabel;
 
     return entries
         .filter(([key]) => key !== "user_id" && key !== "task_id") // Hide internal args
@@ -121,7 +121,7 @@ function ApprovalContent({
                                 {toolInfo.name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
                             </h4>
                             <pre className="mt-2 text-xs text-muted-foreground whitespace-pre-wrap break-all font-mono bg-background/50 rounded p-2 max-h-32 overflow-auto">
-                                {formatToolArgs(toolInfo.args)}
+                                {formatToolArgs(toolInfo.args, t("noArguments"))}
                             </pre>
                         </div>
                     </div>
@@ -446,7 +446,15 @@ export function InterruptDialog({ interrupt, onRespond, onCancel }: InterruptDia
                                 <DialogIcon className="w-4 h-4" />
                             </div>
                             <h2 className="text-sm font-medium text-foreground">
-                                {interrupt.title}
+                                {interrupt.interrupt_type === "approval"
+                                    ? t("toolApproval")
+                                    : interrupt.interrupt_type === "decision"
+                                        ? t("decisionRequired")
+                                        : interrupt.interrupt_type === "input"
+                                            ? t("inputRequired")
+                                            : interrupt.interrupt_type === "confirm"
+                                                ? t("confirmRequired")
+                                                : interrupt.title}
                             </h2>
                         </div>
                         <div className="flex items-center gap-3">

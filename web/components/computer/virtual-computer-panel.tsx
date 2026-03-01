@@ -1,19 +1,16 @@
 "use client";
 
-import React, { useEffect, useCallback, useState, useMemo, useRef } from "react";
+import React, { useEffect, useCallback, useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useComputerStore, COMPUTER_PANEL_MIN_WIDTH, COMPUTER_PANEL_MAX_WIDTH } from "@/lib/stores/computer-store";
 import type { ComputerMode, TimelineEventType, TimelineEvent } from "@/lib/stores/computer-store";
 import { useAgentProgressStore } from "@/lib/stores/agent-progress-store";
-import { ComputerHeader } from "./computer-header";
-import { ComputerStatusBar } from "./computer-status-bar";
+import { ComputerTabBar } from "./computer-tab-bar";
 import { ComputerTerminalView } from "./computer-terminal-view";
-import { ComputerPlanView } from "./computer-plan-view";
 import { ComputerBrowserView } from "./computer-browser-view";
 import { ComputerFileView } from "./computer-file-view";
-import { ComputerPlaybackControls } from "./computer-playback-controls";
 import { ComputerErrorBoundary } from "./computer-error-boundary";
-import { GripHorizontal } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 // Module-level empty array constant for referential stability
@@ -26,8 +23,6 @@ export function VirtualComputerPanel() {
         switch (mode) {
             case "terminal":
                 return t("terminal");
-            case "plan":
-                return t("plan");
             case "browser":
                 return t("browser");
             case "file":
@@ -41,8 +36,6 @@ export function VirtualComputerPanel() {
     const isOpen = useComputerStore((state) => state.isOpen);
     const panelWidth = useComputerStore((state) => state.panelWidth);
     const activeMode = useComputerStore((state) => state.activeMode);
-    const followAgent = useComputerStore((state) => state.followAgent);
-    const autoOpen = useComputerStore((state) => state.autoOpen);
 
     // Per-conversation state via direct state access (stable references)
     const terminalLines = useComputerStore((state) => {
@@ -55,11 +48,7 @@ export function VirtualComputerPanel() {
     });
     const currentCwd = useComputerStore((state) => {
         const id = state.activeConversationId;
-        return id ? state.conversationStates[id]?.currentCwd ?? "/home/ubuntu" : "/home/ubuntu";
-    });
-    const planItems = useComputerStore((state) => {
-        const id = state.activeConversationId;
-        return id ? state.conversationStates[id]?.planItems ?? EMPTY_ARRAY : EMPTY_ARRAY;
+        return id ? state.conversationStates[id]?.currentCwd ?? "/home/user" : "/home/user";
     });
     const browserStream = useComputerStore((state) => {
         const id = state.activeConversationId;
@@ -83,18 +72,15 @@ export function VirtualComputerPanel() {
     });
 
     // Compute visible data slices based on timeline position
-    // When not live, only show items that existed at the given timeline step
     const visibleCounts = useMemo(() => {
         if (isLive) {
             return {
                 terminal: terminalLines.length,
-                plan: planItems.length,
                 browser: true,
                 file: true,
             };
         }
 
-        // Find the maximum dataIndex for each type within the current timeline window
         const maxIndices: Record<TimelineEventType, number> = {
             terminal: -1,
             plan: -1,
@@ -111,25 +97,15 @@ export function VirtualComputerPanel() {
 
         return {
             terminal: maxIndices.terminal + 1,
-            plan: maxIndices.plan + 1,
             browser: maxIndices.browser >= 0,
             file: maxIndices.file >= 0,
         };
-    }, [isLive, currentStep, timeline, terminalLines.length, planItems.length]);
+    }, [isLive, currentStep, timeline, terminalLines.length]);
 
     const visibleTerminalLines = useMemo(
         () => isLive ? terminalLines : terminalLines.slice(0, visibleCounts.terminal),
         [isLive, terminalLines, visibleCounts.terminal]
     );
-
-    const visiblePlanItems = useMemo(
-        () => isLive ? planItems : planItems.slice(0, visibleCounts.plan),
-        [isLive, planItems, visibleCounts.plan]
-    );
-
-    // Split view state
-    const splitView = useComputerStore((state) => state.splitView);
-    const splitSecondaryMode = useComputerStore((state) => state.splitSecondaryMode);
 
     // Actions (stable references via getState)
     const closePanel = useComputerStore.getState().closePanel;
@@ -141,11 +117,8 @@ export function VirtualComputerPanel() {
     const nextStep = useComputerStore.getState().nextStep;
     const prevStep = useComputerStore.getState().prevStep;
     const clearTerminal = useComputerStore.getState().clearTerminal;
-    const setFollowAgent = useComputerStore.getState().setFollowAgent;
-    const setAutoOpen = useComputerStore.getState().setAutoOpen;
-    const toggleSplitView = useComputerStore.getState().toggleSplitView;
-    const setSplitSecondaryMode = useComputerStore.getState().setSplitSecondaryMode;
     const addTerminalLine = useComputerStore.getState().addTerminalLine;
+    const setMode = useComputerStore.getState().setMode;
 
     const activeProgress = useAgentProgressStore((state) => state.activeProgress);
     const setAgentBrowserStream = useAgentProgressStore.getState().setBrowserStream;
@@ -162,37 +135,7 @@ export function VirtualComputerPanel() {
         return () => mq.removeEventListener("change", handler);
     }, []);
 
-    // Track tab activity: mark tabs that have new content since user last viewed them
-    const lastSeenRef = useRef<Record<ComputerMode, number>>({
-        terminal: terminalLines.length,
-        plan: planItems.length,
-        browser: browserStream ? 1 : 0,
-        file: 0,
-    });
-
-    // Update last-seen counts when user switches to a tab
-    useEffect(() => {
-        lastSeenRef.current[activeMode] =
-            activeMode === "terminal" ? terminalLines.length :
-            activeMode === "plan" ? planItems.length :
-            activeMode === "browser" ? (browserStream ? 1 : 0) :
-            0;
-    }, [activeMode, terminalLines.length, planItems.length, browserStream]);
-
-    const tabActivity = useMemo<Partial<Record<ComputerMode, boolean>>>(() => ({
-        terminal: terminalLines.length > lastSeenRef.current.terminal,
-        plan: planItems.length > lastSeenRef.current.plan,
-        browser: (browserStream ? 1 : 0) > lastSeenRef.current.browser,
-    }), [terminalLines.length, planItems.length, browserStream]);
-
-    // Derive sandbox connection status from available signals
-    const sandboxStatus = useMemo<"connected" | "disconnected" | "connecting">(() => {
-        if (activeProgress?.isStreaming) return "connected";
-        if (terminalLines.length > 0 || browserStream || planItems.length > 0) return "connected";
-        return "disconnected";
-    }, [activeProgress?.isStreaming, terminalLines.length, browserStream, planItems.length]);
-
-    // Sync browser stream from agent progress store (compare by value, not reference)
+    // Sync browser stream from agent progress store
     const agentStreamUrl = activeProgress?.browserStream?.streamUrl ?? null;
     const agentSandboxId = activeProgress?.browserStream?.sandboxId ?? null;
     useEffect(() => {
@@ -204,7 +147,6 @@ export function VirtualComputerPanel() {
     // Handle close
     const handleClose = useCallback(() => {
         closePanel();
-        // Also clear browser stream in agent progress store
         setAgentBrowserStream(null);
     }, [closePanel, setAgentBrowserStream]);
 
@@ -221,7 +163,6 @@ export function VirtualComputerPanel() {
     const resize = useCallback(
         (e: MouseEvent) => {
             if (isResizing) {
-                // Calculate width from the right edge
                 const newWidth = window.innerWidth - e.clientX;
                 setPanelWidth(newWidth);
             }
@@ -233,12 +174,9 @@ export function VirtualComputerPanel() {
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === "Escape" && isOpen) {
-                // Don't close the panel if a child is in fullscreen mode
-                // (native fullscreen API or CSS-based fullscreen overlays like the browser view)
                 if (document.fullscreenElement) return;
                 const fullscreenOverlay = document.querySelector('.fixed.inset-0.z-\\[100\\]');
                 if (fullscreenOverlay) return;
-
                 handleClose();
             }
         };
@@ -279,7 +217,6 @@ export function VirtualComputerPanel() {
         const conv = cs.conversationStates[id];
         if (!conv?.workspaceTaskId) return;
 
-        // Add command to terminal immediately
         addTerminalLine({ type: "command", content: command, cwd: conv.currentCwd });
 
         try {
@@ -305,42 +242,19 @@ export function VirtualComputerPanel() {
         }
     }, [addTerminalLine]);
 
-    // Split-view resize state
-    const [splitRatio, setSplitRatio] = useState(0.5);
-    const [isSplitResizing, setIsSplitResizing] = useState(false);
-    const splitContainerRef = useRef<HTMLDivElement>(null);
-
-    const startSplitResizing = useCallback((e: React.MouseEvent) => {
-        e.preventDefault();
-        setIsSplitResizing(true);
-    }, []);
-
-    useEffect(() => {
-        if (!isSplitResizing) return;
-
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!splitContainerRef.current) return;
-            const rect = splitContainerRef.current.getBoundingClientRect();
-            const ratio = (e.clientY - rect.top) / rect.height;
-            setSplitRatio(Math.min(Math.max(ratio, 0.2), 0.8));
-        };
-
-        const handleMouseUp = () => {
-            setIsSplitResizing(false);
-        };
-
-        document.addEventListener("mousemove", handleMouseMove);
-        document.addEventListener("mouseup", handleMouseUp);
-        document.body.style.cursor = "row-resize";
-        document.body.style.userSelect = "none";
-
-        return () => {
-            document.removeEventListener("mousemove", handleMouseMove);
-            document.removeEventListener("mouseup", handleMouseUp);
-            document.body.style.cursor = "";
-            document.body.style.userSelect = "";
-        };
-    }, [isSplitResizing]);
+    // Replay bar: auto-switch view when scrubbing
+    const handleStepChange = useCallback((step: number) => {
+        setCurrentStep(step);
+        if (step > 0 && step <= timeline.length) {
+            const event = timeline[step - 1];
+            if (event) {
+                const viewMode = event.type === "browser" ? "browser" as const
+                    : event.type === "terminal" ? "terminal" as const
+                    : "file" as const;
+                setMode(viewMode);
+            }
+        }
+    }, [setCurrentStep, timeline, setMode]);
 
     // Helper to render a view for a given mode
     const renderViewForMode = useCallback((mode: ComputerMode) => {
@@ -354,13 +268,6 @@ export function VirtualComputerPanel() {
                         currentCwd={currentCwd}
                         onClear={clearTerminal}
                         onSendCommand={handleSendTerminalCommand}
-                        className="flex-1"
-                    />
-                );
-            case "plan":
-                return (
-                    <ComputerPlanView
-                        items={visiblePlanItems}
                         className="flex-1"
                     />
                 );
@@ -378,14 +285,7 @@ export function VirtualComputerPanel() {
             default:
                 return null;
         }
-    }, [visibleTerminalLines, isLive, currentCommand, currentCwd, clearTerminal, handleSendTerminalCommand, visiblePlanItems, browserStream]);
-
-    // Determine if agent is actively using the computer
-    const isActive = activeProgress?.isStreaming && (
-        activeMode === "browser" ? !!browserStream :
-        activeMode === "terminal" ? !!currentCommand :
-        false
-    );
+    }, [visibleTerminalLines, isLive, currentCommand, currentCwd, clearTerminal, handleSendTerminalCommand, browserStream]);
 
     if (!isOpen) return null;
 
@@ -435,26 +335,11 @@ export function VirtualComputerPanel() {
                     tabIndex={0}
                 />
 
-                {/* Header */}
-                <ComputerHeader
+                {/* Tab bar */}
+                <ComputerTabBar
                     activeMode={activeMode}
                     onModeChange={setModeByUser}
                     onClose={handleClose}
-                    sandboxStatus={sandboxStatus}
-                    tabActivity={tabActivity}
-                    followAgent={followAgent}
-                    autoOpen={autoOpen}
-                    onFollowAgentChange={setFollowAgent}
-                    onAutoOpenChange={setAutoOpen}
-                    splitView={splitView}
-                    onToggleSplitView={toggleSplitView}
-                />
-
-                {/* Status bar */}
-                <ComputerStatusBar
-                    activeMode={activeMode}
-                    currentCommand={currentCommand}
-                    isActive={isActive}
                 />
 
                 {/* View area with error boundary */}
@@ -466,88 +351,126 @@ export function VirtualComputerPanel() {
                         fallbackErrorMessage: t("errorBoundary.fallbackMessage"),
                     }}
                 >
-                    {splitView && splitSecondaryMode ? (
-                        <div
-                            ref={splitContainerRef}
-                            className="flex-1 overflow-hidden flex flex-col"
-                        >
-                            {/* Primary view (top) */}
-                            <div
-                                className="overflow-hidden flex flex-col"
-                                style={{ height: `${splitRatio * 100}%` }}
-                                role="tabpanel"
-                                aria-label={getModeAriaLabel(activeMode)}
-                            >
-                                {renderViewForMode(activeMode)}
-                            </div>
+                    <div
+                        className="flex-1 overflow-hidden flex flex-col relative"
+                        role="tabpanel"
+                        aria-label={getModeAriaLabel(activeMode)}
+                    >
+                        {renderViewForMode(activeMode)}
 
-                            {/* Split resize handle */}
-                            <div
-                                className={cn(
-                                    "h-1.5 flex items-center justify-center cursor-row-resize shrink-0",
-                                    "bg-border/30 hover:bg-primary/30 active:bg-primary/50",
-                                    "transition-colors duration-150",
-                                    isSplitResizing && "bg-primary/50"
-                                )}
-                                onMouseDown={startSplitResizing}
-                                role="separator"
-                                aria-orientation="horizontal"
-                                aria-label={t("resizeHandle")}
-                            >
-                                <GripHorizontal className="w-4 h-4 text-muted-foreground/50" />
+                        {/* Floating live indicator */}
+                        {isLive && totalSteps > 0 && (
+                            <div className="absolute bottom-2 right-2 z-10">
+                                <button
+                                    className={cn(
+                                        "flex items-center gap-1 px-2 py-1 rounded-full",
+                                        "bg-primary/10 text-primary text-xs font-medium",
+                                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+                                    )}
+                                    onClick={handleGoLive}
+                                    aria-label={t("live")}
+                                >
+                                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                                    {t("live")}
+                                </button>
                             </div>
-
-                            {/* Secondary view (bottom) */}
-                            <div
-                                className="overflow-hidden flex flex-col"
-                                style={{ height: `${(1 - splitRatio) * 100}%` }}
-                                role="tabpanel"
-                                aria-label={getModeAriaLabel(splitSecondaryMode)}
-                            >
-                                {/* Secondary mode selector */}
-                                <div className="flex items-center gap-1 px-2 h-7 border-b border-border/30 bg-secondary/20 shrink-0">
-                                    {(["terminal", "browser", "file", "plan"] as ComputerMode[])
-                                        .filter((m) => m !== activeMode)
-                                        .map((mode) => (
-                                            <button
-                                                key={mode}
-                                                className={cn(
-                                                    "px-2 py-0.5 text-[11px] rounded font-medium transition-colors",
-                                                    mode === splitSecondaryMode
-                                                        ? "bg-secondary text-foreground"
-                                                        : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-                                                )}
-                                                onClick={() => setSplitSecondaryMode(mode)}
-                                            >
-                                                {t(mode === "file" ? "files" : mode)}
-                                            </button>
-                                        ))
-                                    }
-                                </div>
-                                {renderViewForMode(splitSecondaryMode)}
-                            </div>
-                        </div>
-                    ) : (
-                        <div
-                            className="flex-1 overflow-hidden flex flex-col"
-                            role="tabpanel"
-                            aria-label={getModeAriaLabel(activeMode)}
-                        >
-                            {renderViewForMode(activeMode)}
-                        </div>
-                    )}
+                        )}
+                    </div>
                 </ComputerErrorBoundary>
 
-                {/* Playback controls */}
-                <ComputerPlaybackControls
-                    currentStep={currentStep}
-                    totalSteps={totalSteps}
-                    isLive={isLive}
-                    onPrevStep={prevStep}
-                    onNextStep={nextStep}
-                    onStepChange={setCurrentStep}
-                    onGoLive={handleGoLive}
-                />
+                {/* Conditional replay bar (only when not live) */}
+                {!isLive && totalSteps > 0 && (
+                    <div className="flex items-center gap-1.5 px-3 h-9 border-t border-border shrink-0 bg-background">
+                        {/* Previous step */}
+                        <button
+                            className={cn(
+                                "h-7 w-7 inline-flex items-center justify-center rounded-md",
+                                "text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors",
+                                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                                "disabled:opacity-40 disabled:pointer-events-none"
+                            )}
+                            onClick={prevStep}
+                            disabled={currentStep <= 0}
+                            title={t("previousStep")}
+                            aria-label={t("previousStep")}
+                        >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Range slider */}
+                        <div className="flex-1 relative h-4 flex items-center">
+                            <div className="absolute inset-x-0 h-1 rounded-full bg-border" />
+                            {totalSteps > 0 && (
+                                <div
+                                    className="absolute left-0 h-1 rounded-full bg-foreground/30"
+                                    style={{ width: `${(currentStep / totalSteps) * 100}%` }}
+                                />
+                            )}
+                            <input
+                                type="range"
+                                min={0}
+                                max={totalSteps}
+                                value={currentStep}
+                                onChange={(e) => handleStepChange(parseInt(e.target.value, 10))}
+                                aria-label={t("stepOf", { current: currentStep, total: totalSteps })}
+                                aria-valuemin={0}
+                                aria-valuemax={totalSteps}
+                                aria-valuenow={currentStep}
+                                className={cn(
+                                    "absolute inset-0 w-full h-full opacity-0 cursor-pointer z-[2]",
+                                    "[&::-webkit-slider-thumb]:appearance-none",
+                                    "[&::-webkit-slider-thumb]:w-3",
+                                    "[&::-webkit-slider-thumb]:h-3",
+                                    "[&::-moz-range-thumb]:w-3",
+                                    "[&::-moz-range-thumb]:h-3"
+                                )}
+                            />
+                            {totalSteps > 0 && (
+                                <div
+                                    className="absolute w-2.5 h-2.5 rounded-full bg-foreground border-2 border-background -translate-x-1/2 z-[3] pointer-events-none"
+                                    style={{ left: `${(currentStep / totalSteps) * 100}%` }}
+                                />
+                            )}
+                        </div>
+
+                        {/* Next step */}
+                        <button
+                            className={cn(
+                                "h-7 w-7 inline-flex items-center justify-center rounded-md",
+                                "text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors",
+                                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                                "disabled:opacity-40 disabled:pointer-events-none"
+                            )}
+                            onClick={nextStep}
+                            disabled={currentStep >= totalSteps}
+                            title={t("nextStep")}
+                            aria-label={t("nextStep")}
+                        >
+                            <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Step counter */}
+                        <span className="text-xs text-muted-foreground tabular-nums min-w-[3ch] text-center">
+                            {currentStep}/{totalSteps}
+                        </span>
+
+                        {/* Go to Live button */}
+                        <button
+                            onClick={handleGoLive}
+                            className={cn(
+                                "flex items-center gap-1 px-1.5 py-0.5 rounded",
+                                "text-xs text-muted-foreground hover:text-foreground",
+                                "hover:bg-secondary transition-colors",
+                                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+                            )}
+                            title={t("goToLive")}
+                            aria-label={t("goToLive")}
+                        >
+                            <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50" />
+                            {t("live")}
+                        </button>
+                    </div>
+                )}
             </div>
         </>
     );

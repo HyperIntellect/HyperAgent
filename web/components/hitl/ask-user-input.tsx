@@ -210,7 +210,7 @@ function TextInput({
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={placeholder || "Type your response..."}
+                placeholder={placeholder}
                 rows={1}
                 className={cn(
                     "min-h-[42px] max-h-[120px] resize-none flex-1 text-sm",
@@ -231,8 +231,46 @@ function TextInput({
     );
 }
 
+// Generate localized message for tool approval from tool_info
+function useApprovalMessage(interrupt: InterruptEvent): string {
+    const t = useTranslations("hitl");
+
+    if (interrupt.interrupt_type !== "approval" || !interrupt.tool_info) {
+        return interrupt.message;
+    }
+
+    const { name, args } = interrupt.tool_info;
+    const lowerName = name.toLowerCase();
+
+    if (lowerName.includes("browser_navigate") || lowerName === "computer_tool") {
+        const url = (args.url as string) || (args.action as Record<string, string>)?.text || "unknown";
+        return t("approvalBrowserNav", { url });
+    }
+    if (lowerName.includes("browser_click")) {
+        const target = (args.selector as string) || (args.text as string) || "element";
+        return t("approvalBrowserClick", { target });
+    }
+    if (lowerName.includes("browser_type")) {
+        const target = (args.selector as string) || (args.text as string) || "element";
+        return t("approvalBrowserType", { target });
+    }
+    if (["execute_code", "code_interpreter", "python_repl", "sandbox_execute"].includes(name)) {
+        return t("approvalCodeExecution");
+    }
+    if (["sandbox_file", "file_write", "file_delete", "file_str_replace"].includes(name)) {
+        const path = (args.path as string) || (args.filename as string) || "unknown";
+        if (name.includes("delete")) {
+            return t("approvalFileDelete", { path });
+        }
+        return t("approvalFileModify", { path });
+    }
+
+    return t("approvalGenericTool", { toolName: name });
+}
+
 export function AskUserInput({ interrupt, onRespond, onCancel }: AskUserInputProps) {
     const t = useTranslations("hitl");
+    const approvalMessage = useApprovalMessage(interrupt);
 
     const handleExpire = useCallback(() => {
         onRespond({
@@ -297,8 +335,8 @@ export function AskUserInput({ interrupt, onRespond, onCancel }: AskUserInputPro
             <div className="flex items-start justify-between gap-4">
                 <div className="flex items-start gap-3 flex-1 min-w-0">
                     <MessageSquare className="w-4 h-4 text-foreground mt-0.5 flex-shrink-0" />
-                    <p className="text-sm text-foreground leading-relaxed font-medium">
-                        {interrupt.message}
+                    <p className="text-sm text-foreground leading-relaxed font-medium whitespace-pre-wrap">
+                        {isApproval ? approvalMessage : interrupt.message}
                     </p>
                 </div>
                 <CountdownBadge

@@ -2,6 +2,7 @@
 
 from app.agents.tools.browser_use import (
     browser_click,
+    browser_dom_query,
     browser_get_accessibility_tree,
     browser_get_stream_url,
     browser_navigate,
@@ -10,6 +11,7 @@ from app.agents.tools.browser_use import (
     browser_scroll,
     browser_type,
 )
+from app.agents.tools.codeact import execute_script
 from app.agents.tools.code_execution import execute_code, execute_code_with_context
 from app.agents.tools.database import execute_sql
 from app.agents.tools.deployment import deploy_to_production
@@ -102,7 +104,7 @@ from app.agents.tools.validators import (
     validate_tool_output,
 )
 from app.agents.tools.vision import analyze_image
-from app.agents.tools.web_search import parse_search_results, web_search
+from app.agents.tools.web_search import parse_search_results, web_extract_structured, web_search
 from app.sandbox import (
     DesktopSandboxManager,
     DesktopSandboxSession,
@@ -117,6 +119,7 @@ from app.sandbox import (
 __all__ = [
     # Core tools
     "web_search",
+    "web_extract_structured",
     "parse_search_results",
     "generate_image",
     "generate_slides",
@@ -128,9 +131,11 @@ __all__ = [
     "browser_type",
     "browser_press_key",
     "browser_scroll",
+    "browser_dom_query",
     "browser_get_stream_url",
     "browser_get_accessibility_tree",
     # Code execution and sandbox tools
+    "execute_script",
     "execute_code",
     "execute_code_with_context",
     "sandbox_file",

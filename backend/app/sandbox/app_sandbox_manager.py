@@ -39,10 +39,14 @@ CLEANUP_INTERVAL_SECONDS = 60
 HEALTH_CHECK_SKIP_SECONDS = 30
 
 # Regex for validating package names (prevents shell injection)
-_PACKAGE_NAME_RE = re.compile(r'^[a-zA-Z0-9._-]+([<>=!~]+[a-zA-Z0-9.*]+)?$')
+_PACKAGE_NAME_RE = re.compile(r'^(@[a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+([<>=!~@]+[a-zA-Z0-9.*]+)?$')
 
 # Shell metacharacters that are not allowed in custom commands
 _SHELL_METACHARACTERS = set(';|&$`><(){}\n')
+
+# Pre-cached template directory inside the custom app sandbox image
+TEMPLATE_CACHE_DIR = "/opt/templates"
+TEMPLATE_CACHE_MARKER = "/opt/templates/.cached"
 
 # Supported app templates
 # Note: Using vite@5 instead of vite@latest because E2B sandbox has Node.js 20.9.0
@@ -195,9 +199,18 @@ class AppSandboxManager:
 
         start = settings.boxlite_app_host_port_start
         max_port = min(start + 1000, 65535)
+        pool_size = max_port - start + 1
         for port in range(start, max_port + 1):
             if port not in self._used_ports:
                 self._used_ports.add(port)
+                utilization = len(self._used_ports) / pool_size
+                if utilization > 0.8:
+                    logger.warning(
+                        "app_port_pool_high_utilization",
+                        used=len(self._used_ports),
+                        total=pool_size,
+                        utilization_pct=round(utilization * 100),
+                    )
                 return port
         raise RuntimeError(
             f"No available ports in range {start}-{max_port}. "
@@ -334,6 +347,59 @@ class AppSandboxManager:
 
             return session
 
+    async def _try_cached_scaffold(
+        self,
+        session: AppSandboxSession,
+        template: str,
+    ) -> dict[str, Any] | None:
+        """Try to scaffold from a pre-cached template in the Docker image.
+
+        Returns a result dict on cache hit, or None if the cache is
+        unavailable (missing marker, missing template dir, or copy failure).
+        Callers should fall through to the live scaffold on None.
+        """
+        try:
+            # Check marker file and template directory exist
+            check = await session.sandbox.run_command(
+                f"test -f {TEMPLATE_CACHE_MARKER} && test -d {TEMPLATE_CACHE_DIR}/{template}",
+                timeout=5,
+            )
+            if check.exit_code != 0:
+                return None
+
+            # Copy cached template to project directory
+            result = await session.sandbox.run_command(
+                f"cp -a {TEMPLATE_CACHE_DIR}/{template} /home/user/app",
+                timeout=30,
+            )
+            if result.exit_code != 0:
+                logger.warning(
+                    "app_cached_scaffold_copy_failed",
+                    template=template,
+                    exit_code=result.exit_code,
+                    stderr=result.stderr,
+                )
+                return None
+
+            logger.info(
+                "app_cached_scaffold_hit",
+                template=template,
+                sandbox_id=session.sandbox_id,
+            )
+            return {
+                "success": True,
+                "template": template,
+                "project_dir": "/home/user/app",
+                "message": (
+                    f"Project scaffolded from cache with"
+                    f" {APP_TEMPLATES[template]['name']} template"
+                ),
+                "cached": True,
+            }
+        except Exception as e:
+            logger.warning("app_cached_scaffold_error", template=template, error=str(e))
+            return None
+
     async def scaffold_project(
         self,
         session: AppSandboxSession,
@@ -367,10 +433,24 @@ class AppSandboxManager:
             # Ensure project parent directory exists (may not exist in all images)
             await session.sandbox.run_command("mkdir -p /home/user", timeout=10)
 
-            # Run scaffold command
+            # Try fast path: copy from pre-cached template
+            cached_result = await self._try_cached_scaffold(session, template)
+            if cached_result is not None:
+                session.template = template
+                session.project_dir = "/home/user/app"
+                session.last_health_check = time.monotonic()
+                logger.info(
+                    "app_scaffold_completed",
+                    template=template,
+                    sandbox_id=session.sandbox_id,
+                    cached=True,
+                )
+                return cached_result
+
+            # Slow path: live scaffold from npm
             result = await session.sandbox.run_command(
                 template_config["scaffold_cmd"],
-                timeout=300,  # 5 minutes for scaffolding
+                timeout=180,  # 3 minutes for scaffolding (budget: 180+120+60 < 600s skill limit)
                 cwd="/home/user",
             )
 
@@ -866,7 +946,7 @@ fi
         )
 
         try:
-            result = await session.sandbox.run_command(cmd, timeout=300)
+            result = await session.sandbox.run_command(cmd, timeout=120)  # 2 minutes (budget: 180+120+60 < 600s skill limit)
 
             if result.exit_code != 0:
                 return {
@@ -1018,6 +1098,66 @@ fi
             )
             return False
 
+    async def save_snapshot(
+        self,
+        user_id: str | None = None,
+        task_id: str | None = None,
+        paths: list[str] | None = None,
+    ) -> dict | None:
+        """Save a snapshot of the app sandbox workspace.
+
+        Args:
+            user_id: User identifier
+            task_id: Task identifier
+            paths: Paths to include in snapshot (uses defaults if None)
+
+        Returns:
+            Snapshot metadata dict, or None if failed
+        """
+        session = await self.get_session(user_id=user_id, task_id=task_id)
+        if not session:
+            return None
+
+        from app.services.snapshot_service import save_snapshot
+
+        return await save_snapshot(
+            runtime=session.sandbox,
+            user_id=user_id or "anonymous",
+            task_id=task_id or "default",
+            sandbox_type="app",
+            paths=paths,
+        )
+
+    async def restore_snapshot(
+        self,
+        user_id: str | None = None,
+        task_id: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> bool:
+        """Restore a snapshot into the app sandbox.
+
+        Args:
+            user_id: User identifier
+            task_id: Task identifier
+            snapshot_id: Specific snapshot ID (latest if None)
+
+        Returns:
+            True if restore succeeded
+        """
+        session = await self.get_session(user_id=user_id, task_id=task_id)
+        if not session:
+            return False
+
+        from app.services.snapshot_service import restore_snapshot
+
+        return await restore_snapshot(
+            runtime=session.sandbox,
+            user_id=user_id or "anonymous",
+            task_id=task_id or "default",
+            sandbox_type="app",
+            snapshot_id=snapshot_id,
+        )
+
     async def cleanup_session(
         self,
         user_id: str | None = None,
@@ -1040,9 +1180,9 @@ fi
     async def _cleanup_session_internal(self, session_key: str) -> bool:
         """Internal cleanup method (assumes lock is held).
 
-        Attempts to kill the sandbox first, then removes from the session dict.
-        On kill failure the session is still removed to avoid infinite retry,
-        but an ERROR is logged indicating the sandbox may be leaked.
+        Auto-saves a snapshot before killing the sandbox. On kill failure
+        the session is still removed to avoid infinite retry, but an ERROR
+        is logged indicating the sandbox may be leaked.
 
         Args:
             session_key: Session key to clean up
@@ -1053,6 +1193,28 @@ fi
         session = self._sessions.get(session_key)
         if session is None:
             return False
+
+        # Auto-snapshot before cleanup
+        try:
+            # Parse user_id and task_id from session key (format: "app:user_id:task_id")
+            parts = session_key.split(":", 2)
+            user_id = parts[1] if len(parts) > 1 else "anonymous"
+            task_id = parts[2] if len(parts) > 2 else "default"
+
+            from app.services.snapshot_service import save_snapshot
+
+            await save_snapshot(
+                runtime=session.sandbox,
+                user_id=user_id,
+                task_id=task_id,
+                sandbox_type="app",
+            )
+        except Exception as e:
+            logger.debug(
+                "app_auto_snapshot_failed",
+                session_key=session_key,
+                error=str(e),
+            )
 
         # Reclaim the host port allocated for this session (if any)
         if session.sandbox and hasattr(session.sandbox, '_port_map'):

@@ -172,6 +172,12 @@ class UnifiedQueryRequest(BaseModel):
     history: list[ChatMessage] = Field(default_factory=list)
     attachment_ids: list[str] = Field(default_factory=list)
     locale: str = Field(default="en", description="User's preferred language (e.g., 'en', 'zh-CN')")
+    budget: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional run budget controls (tokens, cost, tool_calls, wall_clock_seconds)",
+    )
+    execution_mode: Literal["auto", "guided", "strict", "codeact"] = Field(default="auto")
+    run_labels: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("provider")
     @classmethod

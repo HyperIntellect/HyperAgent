@@ -47,6 +47,9 @@ class ToolExecutionContext:
     tool: BaseTool | None  # Resolved tool from tool_map
     user_id: str | None = None
     task_id: str | None = None
+    run_id: str | None = None
+    policy_decision: str | None = None
+    policy_reason: str | None = None
 
 
 @dataclass
@@ -128,26 +131,67 @@ async def execute_tool(
         ToolExecutionResult with message, events, error status
     """
     all_events: list[dict] = []
+    final_status = "failed"
+    final_error: str | None = None
+    final_result_summary: str | None = None
 
     # 1. Before-execution hook (HITL, guardrails, ask_user)
     if not hooks.skip_before_execution:
         short_circuit = await hooks.before_execution(ctx)
         if short_circuit is not None:
+            if short_circuit.pending_interrupt:
+                final_status = "pending_approval"
+            elif short_circuit.is_error:
+                final_status = "failed"
+                final_error = short_circuit.message.content if short_circuit.message else None
+            else:
+                final_status = "completed"
             return short_circuit
+
+    # Persist tool execution start in run ledger if available.
+    if ctx.run_id and ctx.tool_call_id:
+        try:
+            from app.services.run_ledger import run_ledger_service
+
+            await run_ledger_service.record_tool_execution_start(
+                run_id=ctx.run_id,
+                step_id=ctx.tool_call_id,
+                tool_call_id=ctx.tool_call_id,
+                tool_name=ctx.tool_name,
+                tool_args=ctx.tool_args,
+                policy_decision=ctx.policy_decision,
+                policy_reason=ctx.policy_reason,
+            )
+        except Exception as e:
+            logger.warning("tool_execution_start_persist_failed", error=str(e))
 
     # 2. Inject context (user_id / task_id)
     inject_tool_context(ctx.tool_name, ctx.tool_args, ctx.user_id, ctx.task_id)
 
     # 3. Emit tool-call event
     call_events = hooks.on_tool_call(ctx.tool_name, ctx.tool_args, ctx.tool_call_id)
+    if ctx.policy_decision:
+        for evt in call_events:
+            if evt.get("type") == "tool_call":
+                evt["policy_decision"] = ctx.policy_decision
+                if ctx.policy_reason:
+                    evt["policy_reason"] = ctx.policy_reason
     all_events.extend(call_events)
 
     # 4. Tool not found
     if ctx.tool is None:
         error_msg = f"Tool not found: {ctx.tool_name}"
+        final_status = "failed"
+        final_error = error_msg
         result_events = hooks.on_tool_result(
             ctx.tool_name, error_msg, ctx.tool_call_id
         )
+        if ctx.policy_decision:
+            for evt in result_events:
+                if evt.get("type") == "tool_result":
+                    evt["policy_decision"] = ctx.policy_decision
+                    if ctx.policy_reason:
+                        evt["policy_reason"] = ctx.policy_reason
         all_events.extend(result_events)
         return ToolExecutionResult(
             message=ToolMessage(
@@ -194,7 +238,15 @@ async def execute_tool(
             result_str[:500] if result_str else "",
             ctx.tool_call_id,
         )
+        if ctx.policy_decision:
+            for evt in result_events:
+                if evt.get("type") == "tool_result":
+                    evt["policy_decision"] = ctx.policy_decision
+                    if ctx.policy_reason:
+                        evt["policy_reason"] = ctx.policy_reason
         all_events.extend(result_events)
+        final_status = "completed"
+        final_result_summary = result_str[:500] if result_str else ""
 
         return ToolExecutionResult(
             message=ToolMessage(
@@ -211,10 +263,18 @@ async def execute_tool(
             "tool_execution_failed", tool=ctx.tool_name, error=str(e)
         )
         error_msg = f"Error executing {ctx.tool_name}: {e}"
+        final_status = "failed"
+        final_error = error_msg
         error_category = classify_error(str(e), ctx.tool_name)
         result_events = hooks.on_tool_result(
             ctx.tool_name, error_msg, ctx.tool_call_id
         )
+        if ctx.policy_decision:
+            for evt in result_events:
+                if evt.get("type") == "tool_result":
+                    evt["policy_decision"] = ctx.policy_decision
+                    if ctx.policy_reason:
+                        evt["policy_reason"] = ctx.policy_reason
         all_events.extend(result_events)
         return ToolExecutionResult(
             message=ToolMessage(
@@ -226,6 +286,20 @@ async def execute_tool(
             is_error=True,
             error_category=error_category,
         )
+    finally:
+        if ctx.run_id and ctx.tool_call_id:
+            try:
+                from app.services.run_ledger import run_ledger_service
+
+                await run_ledger_service.record_tool_execution_end(
+                    run_id=ctx.run_id,
+                    tool_call_id=ctx.tool_call_id,
+                    status=final_status,
+                    result_summary=final_result_summary,
+                    error=final_error,
+                )
+            except Exception:
+                pass
 
 
 async def execute_tools_batch(
@@ -235,6 +309,7 @@ async def execute_tools_batch(
     hooks: ToolExecutionHooks,
     user_id: str | None = None,
     task_id: str | None = None,
+    run_id: str | None = None,
     hitl_partition: bool = False,
     hitl_check: Callable[[str], bool] | None = None,
     use_retry: bool = False,
@@ -294,6 +369,7 @@ async def execute_tools_batch(
             tool=tool,
             user_id=user_id,
             task_id=task_id,
+            run_id=run_id,
         )
         return await execute_tool(ctx, hooks=hooks, config=config, use_retry=use_retry)
 
@@ -404,8 +480,11 @@ class TaskToolHooks(ToolExecutionHooks):
         """HITL approval check, ask_user handling, guardrail scan."""
         from app.agents.hitl.interrupt_manager import get_interrupt_manager
         from app.agents.hitl.tool_risk import requires_approval, requires_approval_for_skill
+        from app.agents.policy import PolicyInput, get_policy_engine
+        from app.agents.policy.engine import PolicyDecision
         from app.config import settings
         from app.guardrails.scanners.tool_scanner import tool_scanner
+        from app.agents.tools.registry import get_tool_contract
 
         interrupt_manager = get_interrupt_manager()
         user_id = self.state.get("user_id")
@@ -414,6 +493,19 @@ class TaskToolHooks(ToolExecutionHooks):
         # 0. Skill-level HITL policy (invoke_skill can encapsulate high-risk tools)
         if ctx.tool_name == "invoke_skill":
             skill_id = str(ctx.tool_args.get("skill_id", "")).strip()
+            skill_policy = get_policy_engine().decide(
+                PolicyInput(
+                    tool_name="invoke_skill",
+                    tool_args=ctx.tool_args,
+                    auto_approve_tools=self.state.get("auto_approve_tools", []),
+                    hitl_enabled=self.state.get("hitl_enabled", True),
+                    risk_threshold=settings.hitl_default_risk_threshold,
+                    contract=get_tool_contract("invoke_skill"),
+                    is_skill_invocation=True,
+                )
+            )
+            ctx.policy_decision = skill_policy.decision.value
+            ctx.policy_reason = skill_policy.reason_code
             if requires_approval_for_skill(
                 skill_id=skill_id,
                 auto_approve_tools=self.state.get("auto_approve_tools", []),
@@ -456,8 +548,40 @@ class TaskToolHooks(ToolExecutionHooks):
                         "is_approval": True,
                     },
                 )
+            if skill_policy.decision == PolicyDecision.DENY:
+                return ToolExecutionResult(
+                    message=ToolMessage(
+                        content=f"Tool denied by policy: {skill_policy.reason_code}",
+                        tool_call_id=ctx.tool_call_id,
+                        name=ctx.tool_name,
+                    ),
+                    events=[],
+                    is_error=True,
+                )
 
         # 1. HITL approval check
+        tool_policy = get_policy_engine().decide(
+            PolicyInput(
+                tool_name=ctx.tool_name,
+                tool_args=ctx.tool_args,
+                auto_approve_tools=self.state.get("auto_approve_tools", []),
+                hitl_enabled=self.state.get("hitl_enabled", True),
+                risk_threshold=settings.hitl_default_risk_threshold,
+                contract=get_tool_contract(ctx.tool_name),
+            )
+        )
+        ctx.policy_decision = tool_policy.decision.value
+        ctx.policy_reason = tool_policy.reason_code
+        if tool_policy.decision == PolicyDecision.DENY:
+            return ToolExecutionResult(
+                message=ToolMessage(
+                    content=f"Tool denied by policy: {tool_policy.reason_code}",
+                    tool_call_id=ctx.tool_call_id,
+                    name=ctx.tool_name,
+                ),
+                events=[],
+                is_error=True,
+            )
         if requires_approval(
             ctx.tool_name,
             auto_approve_tools=self.state.get("auto_approve_tools", []),
@@ -513,6 +637,7 @@ class TaskToolHooks(ToolExecutionHooks):
         if ctx.tool_name == "ask_user":
             from app.agents import events as agent_events
             from app.agents.hitl.interrupt_manager import (
+                create_confirm_interrupt,
                 create_decision_interrupt,
                 create_input_interrupt,
             )
@@ -538,13 +663,12 @@ class TaskToolHooks(ToolExecutionHooks):
             message = f"{context}\n\n{question}" if context else question
 
             if question_type == "confirmation":
-                options = [
-                    {"label": "Yes", "value": "yes", "description": "Proceed"},
-                    {"label": "No", "value": "no", "description": "Cancel"},
-                ]
-                question_type = "decision"
-
-            if question_type == "decision" and options:
+                interrupt_event = create_confirm_interrupt(
+                    title="Confirmation",
+                    message=message,
+                    timeout_seconds=settings.hitl_decision_timeout,
+                )
+            elif question_type == "decision" and options:
                 interrupt_event = create_decision_interrupt(
                     title="Agent Question",
                     message=message,
@@ -695,8 +819,11 @@ class ResearchToolHooks(ToolExecutionHooks):
         from app.agents import events as agent_events
         from app.agents.hitl.interrupt_manager import create_approval_interrupt, get_interrupt_manager
         from app.agents.hitl.tool_risk import requires_approval, requires_approval_for_skill
+        from app.agents.policy import PolicyInput, get_policy_engine
+        from app.agents.policy.engine import PolicyDecision
         from app.config import settings
         from app.guardrails.scanners.tool_scanner import tool_scanner
+        from app.agents.tools.registry import get_tool_contract
 
         if ctx.tool is None:
             return None
@@ -708,6 +835,19 @@ class ResearchToolHooks(ToolExecutionHooks):
         # HITL approval for invoke_skill (skill-specific) and direct high-risk tools.
         if ctx.tool_name == "invoke_skill":
             skill_id = str(ctx.tool_args.get("skill_id", "")).strip()
+            skill_policy = get_policy_engine().decide(
+                PolicyInput(
+                    tool_name="invoke_skill",
+                    tool_args=ctx.tool_args,
+                    auto_approve_tools=self.state.get("auto_approve_tools", []),
+                    hitl_enabled=self.state.get("hitl_enabled", True),
+                    risk_threshold=settings.hitl_default_risk_threshold,
+                    contract=get_tool_contract("invoke_skill"),
+                    is_skill_invocation=True,
+                )
+            )
+            ctx.policy_decision = skill_policy.decision.value
+            ctx.policy_reason = skill_policy.reason_code
             if requires_approval_for_skill(
                 skill_id=skill_id,
                 auto_approve_tools=self.state.get("auto_approve_tools", []),
@@ -742,7 +882,39 @@ class ResearchToolHooks(ToolExecutionHooks):
                         "is_approval": True,
                     },
                 )
+            if skill_policy.decision == PolicyDecision.DENY:
+                return ToolExecutionResult(
+                    message=ToolMessage(
+                        content=f"Tool denied by policy: {skill_policy.reason_code}",
+                        tool_call_id=ctx.tool_call_id,
+                        name=ctx.tool_name,
+                    ),
+                    events=[],
+                    is_error=True,
+                )
 
+        tool_policy = get_policy_engine().decide(
+            PolicyInput(
+                tool_name=ctx.tool_name,
+                tool_args=ctx.tool_args,
+                auto_approve_tools=self.state.get("auto_approve_tools", []),
+                hitl_enabled=self.state.get("hitl_enabled", True),
+                risk_threshold=settings.hitl_default_risk_threshold,
+                contract=get_tool_contract(ctx.tool_name),
+            )
+        )
+        ctx.policy_decision = tool_policy.decision.value
+        ctx.policy_reason = tool_policy.reason_code
+        if tool_policy.decision == PolicyDecision.DENY:
+            return ToolExecutionResult(
+                message=ToolMessage(
+                    content=f"Tool denied by policy: {tool_policy.reason_code}",
+                    tool_call_id=ctx.tool_call_id,
+                    name=ctx.tool_name,
+                ),
+                events=[],
+                is_error=True,
+            )
         if requires_approval(
             ctx.tool_name,
             auto_approve_tools=self.state.get("auto_approve_tools", []),

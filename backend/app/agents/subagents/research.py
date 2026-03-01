@@ -441,6 +441,7 @@ async def search_tools_node(state: ResearchState) -> dict:
         hooks=hooks,
         user_id=user_id,
         task_id=task_id,
+        run_id=state.get("run_id"),
         hitl_partition=True,
         hitl_check=hitl_check,
     )
@@ -523,6 +524,7 @@ async def wait_interrupt_node(state: ResearchState) -> dict:
                 tool=tool_map.get(tool_name),
                 user_id=user_id,
                 task_id=task_id,
+                run_id=state.get("run_id"),
             )
             hooks = ResearchToolHooks(state=state, skip_before_execution=True)
             exec_result = await execute_tool(ctx, hooks=hooks, config=react_config)

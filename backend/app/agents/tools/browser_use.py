@@ -1162,6 +1162,137 @@ async def browser_wait_for_element(
         return _error_response(error=str(e))
 
 
+class BrowserDomQueryInput(BaseModel):
+    """Input schema for browser DOM query tool."""
+
+    selector: str = Field(
+        description="CSS selector to query (e.g., '.result-item a', 'table tr')"
+    )
+    max_results: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Maximum matched elements to return",
+    )
+    include_html: bool = Field(
+        default=False,
+        description="Whether to include outerHTML snippet for each matched element",
+    )
+    user_id: str | None = Field(
+        default=None,
+        description="User ID for session management (injected by system)",
+    )
+    task_id: str | None = Field(
+        default=None,
+        description="Task ID for session management (injected by system)",
+    )
+
+
+@tool(args_schema=BrowserDomQueryInput)
+async def browser_dom_query(
+    selector: str,
+    max_results: int = 20,
+    include_html: bool = False,
+    user_id: str | None = None,
+    task_id: str | None = None,
+) -> str:
+    """Query DOM elements using a CSS selector and return structured results.
+
+    Use this when coordinate-based clicking is unreliable. This tool inspects
+    the current page DOM and returns matched elements with useful fields:
+    text, tagName, href/src, id, className, and optional outerHTML snippet.
+    """
+    if not is_desktop_sandbox_available():
+        return _error_response(error="Desktop sandbox not available. Check SANDBOX_PROVIDER configuration.")
+
+    logger.info(
+        "browser_dom_query_invoked",
+        selector=selector,
+        max_results=max_results,
+        include_html=include_html,
+    )
+
+    try:
+        _, session = await _get_browser_session(user_id, task_id)
+        if not session:
+            return _error_response(error="No active browser sandbox session. Use browser_navigate first.")
+
+        js_selector = selector.replace("\\", "\\\\").replace("'", "\\'")
+        include_html_js = "true" if include_html else "false"
+        js_code = (
+            f"(function() {{"
+            f"  var nodes = Array.from(document.querySelectorAll('{js_selector}')).slice(0, {max_results});"
+            f"  var items = nodes.map(function(el) {{"
+            f"    return {{"
+            f"      tag: el.tagName ? el.tagName.toLowerCase() : '',"
+            f"      text: (el.innerText || el.textContent || '').trim(),"
+            f"      id: el.id || '',"
+            f"      className: el.className || '',"
+            f"      href: el.href || '',"
+            f"      src: el.src || '',"
+            f"      value: (typeof el.value !== 'undefined') ? String(el.value) : '',"
+            f"      outer_html: {include_html_js} ? (el.outerHTML || '').slice(0, 500) : ''"
+            f"    }};"
+            f"  }});"
+            f"  return JSON.stringify({{count: items.length, selector: '{js_selector}', items: items}});"
+            f"}})()"
+        )
+
+        import shlex
+
+        safe_js = shlex.quote(js_code)
+        cmd = f"python3 -c {shlex.quote(_CDP_EVAL_SCRIPT)} {safe_js}"
+        stdout, stderr, exit_code = await session.executor.run_command(cmd, timeout_ms=15000)
+
+        if exit_code != 0:
+            return _error_response(
+                error=f"DOM query failed: {stderr[:500] if stderr else 'Unknown error'}",
+                selector=selector,
+                sandbox_id=session.sandbox_id,
+            )
+
+        try:
+            cdp_result = json.loads(stdout.strip())
+        except json.JSONDecodeError:
+            return _error_response(
+                error=f"Invalid DOM query output: {stdout[:200]}",
+                selector=selector,
+                sandbox_id=session.sandbox_id,
+            )
+
+        if "error" in cdp_result:
+            return _error_response(
+                error=str(cdp_result["error"]),
+                selector=selector,
+                sandbox_id=session.sandbox_id,
+            )
+
+        value = cdp_result.get("value", "")
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                pass
+
+        if not isinstance(value, dict):
+            value = {"count": 0, "selector": selector, "items": []}
+
+        logger.info(
+            "browser_dom_query_completed",
+            selector=selector,
+            count=value.get("count", 0),
+        )
+        return _success_response(
+            selector=selector,
+            count=value.get("count", 0),
+            items=value.get("items", []),
+            sandbox_id=session.sandbox_id,
+        )
+    except Exception as e:
+        logger.error("browser_dom_query_failed", error=str(e))
+        return _error_response(error=str(e), selector=selector)
+
+
 # JavaScript snippet to capture the accessibility tree via CDP.
 # Uses Accessibility.getFullAXTree and formats the result as indented text.
 _A11Y_TREE_SCRIPT = r"""

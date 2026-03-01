@@ -45,6 +45,18 @@ class WebSearchOutput(BaseModel):
     error: str | None = Field(default=None)
 
 
+class WebExtractStructuredOutput(BaseModel):
+    """Expected output schema for web_extract_structured tool."""
+
+    success: bool = Field(default=True)
+    query: str = Field(default="")
+    url: str | None = Field(default=None)
+    fields: list[str] = Field(default_factory=list)
+    count: int = Field(default=0)
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    error: str | None = Field(default=None)
+
+
 class ImageGenerationOutput(BaseModel):
     """Expected output schema for generate_image tool."""
 
@@ -101,6 +113,7 @@ class FileOperationOutput(BaseModel):
 # Tool name to validator mapping
 TOOL_VALIDATORS: dict[str, type[BaseModel]] = {
     "web_search": WebSearchOutput,
+    "web_extract_structured": WebExtractStructuredOutput,
     "generate_image": ImageGenerationOutput,
     "analyze_image": ImageAnalysisOutput,
     "execute_code": CodeExecutionOutput,

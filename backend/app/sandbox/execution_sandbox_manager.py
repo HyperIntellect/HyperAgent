@@ -187,6 +187,74 @@ class ExecutionSandboxManager:
 
             return session
 
+    async def get_or_create_sandbox_with_runtime(
+        self,
+        user_id: str | None = None,
+        task_id: str | None = None,
+        runtime: "SandboxRuntime | None" = None,
+        timeout: timedelta | None = None,
+    ) -> ExecutionSandboxSession:
+        """Get or create a sandbox session using a pre-existing runtime.
+
+        This allows the unified sandbox manager to share a single runtime
+        across both code execution and app development.
+
+        Args:
+            user_id: User identifier
+            task_id: Task identifier
+            runtime: Pre-existing SandboxRuntime to wrap
+            timeout: Session timeout
+
+        Returns:
+            ExecutionSandboxSession wrapping the provided runtime
+        """
+        if runtime is None:
+            return await self.get_or_create_sandbox(user_id, task_id, timeout)
+
+        session_key = self.make_session_key(user_id, task_id)
+        session_timeout = timeout or get_default_execution_session_timeout()
+
+        async with self._session_lock:
+            # Check for existing valid session
+            if session_key in self._sessions:
+                session = self._sessions[session_key]
+                if not session.is_expired and await self._is_sandbox_healthy(session):
+                    session.touch()
+                    self._total_reused += 1
+                    logger.info(
+                        "execution_sandbox_session_reused_with_runtime",
+                        session_key=session_key,
+                        sandbox_id=session.sandbox_id,
+                    )
+                    return session
+                else:
+                    # Remove stale session entry but don't kill the runtime
+                    # (it's owned by the unified manager)
+                    self._sessions.pop(session_key, None)
+
+            # Wrap the provided runtime in a code executor
+            from app.sandbox.provider import create_code_executor
+
+            executor = create_code_executor()
+            executor.set_runtime(runtime)
+
+            session = ExecutionSandboxSession(
+                executor=executor,
+                session_key=session_key,
+                timeout=session_timeout,
+            )
+            self._sessions[session_key] = session
+            self._total_created += 1
+
+            logger.info(
+                "execution_sandbox_session_created_with_runtime",
+                session_key=session_key,
+                sandbox_id=session.sandbox_id,
+            )
+
+            self._ensure_cleanup_task()
+            return session
+
     async def get_session(
         self,
         user_id: str | None = None,
@@ -255,6 +323,68 @@ class ExecutionSandboxManager:
             )
             return False
 
+    async def save_snapshot(
+        self,
+        user_id: str | None = None,
+        task_id: str | None = None,
+        paths: list[str] | None = None,
+    ) -> dict | None:
+        """Save a snapshot of the sandbox workspace.
+
+        Args:
+            user_id: User identifier
+            task_id: Task identifier
+            paths: Paths to include in snapshot (uses defaults if None)
+
+        Returns:
+            Snapshot metadata dict, or None if failed
+        """
+        session = await self.get_session(user_id=user_id, task_id=task_id)
+        if not session:
+            return None
+
+        from app.services.snapshot_service import save_snapshot
+
+        runtime = session.executor.get_runtime()
+        return await save_snapshot(
+            runtime=runtime,
+            user_id=user_id or "anonymous",
+            task_id=task_id or "default",
+            sandbox_type="execution",
+            paths=paths,
+        )
+
+    async def restore_snapshot(
+        self,
+        user_id: str | None = None,
+        task_id: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> bool:
+        """Restore a snapshot into the sandbox.
+
+        Args:
+            user_id: User identifier
+            task_id: Task identifier
+            snapshot_id: Specific snapshot ID (latest if None)
+
+        Returns:
+            True if restore succeeded
+        """
+        session = await self.get_session(user_id=user_id, task_id=task_id)
+        if not session:
+            return False
+
+        from app.services.snapshot_service import restore_snapshot
+
+        runtime = session.executor.get_runtime()
+        return await restore_snapshot(
+            runtime=runtime,
+            user_id=user_id or "anonymous",
+            task_id=task_id or "default",
+            sandbox_type="execution",
+            snapshot_id=snapshot_id,
+        )
+
     async def cleanup_session(
         self,
         user_id: str | None = None,
@@ -277,9 +407,9 @@ class ExecutionSandboxManager:
     async def _cleanup_session_internal(self, session_key: str) -> bool:
         """Internal cleanup method (assumes lock is held).
 
-        Attempts to kill the sandbox first, then removes from the session dict.
-        On kill failure the session is still removed to avoid infinite retry,
-        but an ERROR is logged indicating the sandbox may be leaked.
+        Auto-saves a snapshot before killing the sandbox. On kill failure
+        the session is still removed to avoid infinite retry, but an ERROR
+        is logged indicating the sandbox may be leaked.
 
         Args:
             session_key: Session key to clean up
@@ -290,6 +420,29 @@ class ExecutionSandboxManager:
         session = self._sessions.get(session_key)
         if session is None:
             return False
+
+        # Auto-snapshot before cleanup
+        try:
+            runtime = session.executor.get_runtime()
+            # Parse user_id and task_id from session key (format: "user_id:task_id")
+            parts = session_key.split(":", 1)
+            user_id = parts[0] if len(parts) > 0 else "anonymous"
+            task_id = parts[1] if len(parts) > 1 else "default"
+
+            from app.services.snapshot_service import save_snapshot
+
+            await save_snapshot(
+                runtime=runtime,
+                user_id=user_id,
+                task_id=task_id,
+                sandbox_type="execution",
+            )
+        except Exception as e:
+            logger.debug(
+                "execution_auto_snapshot_failed",
+                session_key=session_key,
+                error=str(e),
+            )
 
         try:
             await session.executor.cleanup()

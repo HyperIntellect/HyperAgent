@@ -102,12 +102,31 @@ reason_node → should_continue → act_node → should_wait_or_reason → reaso
 | Image | `generate_image`, `analyze_image` |
 | Browser | `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_type`, `browser_press_key`, `browser_scroll`, `browser_get_stream_url` |
 | Code | `execute_code` |
+| CodeAct | `execute_script` (opt-in via `execution_mode: "codeact"`) |
 | Data | `sandbox_file` |
 | App | `create_app_project`, `app_write_file`, `app_install_packages`, `app_start_server` |
 | Skills | `invoke_skill`, `list_skills` |
 | Slides | `generate_slides` |
 | Handoff | `delegate_to_research` |
 | HITL | `ask_user` |
+
+### Todo File Persistence
+
+The Task agent maintains a persistent todo checklist in the sandbox filesystem at `/home/user/.hyperagent/todo.md`. This prevents goal drift across long tool-calling sequences (50+ iterations).
+
+- On plan creation: writes execution plan as markdown checklist to sandbox
+- Each iteration: reads current todo state and injects as `[Active Task Context]` system message (capped at 2000 chars)
+- On step completion: updates checklist items in sandbox file
+- Emits `todo_update` events for frontend rendering
+
+### Anti-Repetition Detection
+
+Detects when the agent falls into repetitive tool-calling patterns (same error → same retry):
+
+- Computes MD5 hash of `tool_name + sorted(args)` for each tool call batch
+- Tracks consecutive identical hashes in `last_tool_calls_hash` state field
+- After 3+ consecutive identical batches, injects a variation prompt suggesting alternative approaches
+- Fires before the existing `plan_revision` mechanism (which triggers at 5 consecutive errors)
 
 ### Planned Execution
 
@@ -116,6 +135,8 @@ When the `task_planning` skill returns a plan, the Task agent enters planned exe
 - Step guidance injected before each LLM call
 - Progress events emitted as steps complete
 - `current_step_index` tracks position
+- Emits `plan_overview` event at start (with all steps) and `plan_step_completed` events as each step finishes
+- Frontend renders plan as interactive checklist with progress bar
 
 ### Context Compression
 
@@ -124,6 +145,16 @@ Applied in `reason_node` before each LLM call when token count exceeds threshold
 2. If above threshold (default 60k), compresses older messages using FLASH-tier LLM
 3. Injects summary as system context message
 4. Falls back to message truncation if compression fails
+
+### KV-Cache-Friendly Prompt Construction
+
+Messages are split into a "stable prefix" and "dynamic suffix" to maximize LLM KV-cache hit rates:
+
+- **Stable prefix**: System prompt + tool schemas + history summary (never reordered between iterations)
+- **Dynamic suffix**: New tool calls/results appended after prefix
+- `prefix_hash` in state tracks whether the prefix has changed; if unchanged, the LLM can reuse cached KV entries
+- Tool filtering uses "soft disable" (system message noting unavailable tools) instead of removing tool schemas, preserving prefix stability
+- Helpers: `get_stable_prefix()` and `get_dynamic_suffix()` in `context_compression.py`
 
 ## Research Agent
 
@@ -180,7 +211,7 @@ Orchestrates the multi-agent workflow:
 
 1. **Routing**: LLM-based agent selection (or explicit mode override)
 2. **Agent Execution**: Invokes selected agent subgraph
-3. **Handoff**: Task agent can delegate to Research agent via `delegate_to_research` tool (max 3 handoffs)
+3. **Handoff**: Task agent can delegate to Research agent via `delegate_to_research` tool (max 3 handoffs). Handoffs can include `handoff_artifacts` — files transferred from the source sandbox to the target sandbox via storage (see Cross-Sandbox Handoff Artifacts).
 4. **Event Streaming**: Normalizes and deduplicates events from LangGraph via `StreamProcessor`
 
 ### State Hierarchy
@@ -303,9 +334,84 @@ Configured via `SANDBOX_PROVIDER` env var.
 - **Desktop Executor** — Browser automation with screenshots and streaming
 - **App Runtime** — Scaffold, build, and host web applications
 
+### Unified Sandbox Manager
+
+**File:** `backend/app/sandbox/unified_sandbox_manager.py`
+
+The `UnifiedSandboxManager` provides a single shared `SandboxRuntime` for both code execution and app development within one agent run, avoiding the overhead of separate VMs for the same task.
+
+- Session key: `unified:{user_id}:{task_id}`
+- Default timeout: 30 minutes
+- `get_or_create_runtime(user_id, task_id)` — shared runtime for both code and app
+- `get_code_executor(user_id, task_id)` — wraps shared runtime as `BaseCodeExecutor`
+- `get_app_session(user_id, task_id, template)` — wraps shared runtime as `AppSandboxSession`
+- Desktop sandboxes remain separate (different VM image requirement)
+- Cleanup: `cleanup_sandboxes_for_task()` prioritizes unified sessions first
+
+### Persistent Sandbox Snapshots
+
+**File:** `backend/app/services/snapshot_service.py`
+
+Sandbox state (installed packages, generated files) is preserved across SSE disconnects and timeouts via workspace snapshots.
+
+- `save_snapshot(runtime, user_id, task_id, sandbox_type)` — tar key directories, upload to storage
+- `restore_snapshot(runtime, user_id, task_id, sandbox_type)` — download and restore on reconnect
+- Auto-snapshot on disconnect/cleanup (execution and app managers)
+- Storage: R2 (production) or local filesystem (development)
+- Retention: 24 hours (configurable via `SNAPSHOT_RETENTION_HOURS`)
+- Max size: 100MB per snapshot (configurable via `SNAPSHOT_MAX_SIZE_BYTES`)
+- Default paths: `/home/user`, `/tmp/outputs` (execution); `/home/user/app` (app)
+- DB model: `SandboxSnapshot` with indexes on (user_id, task_id, sandbox_type)
+
+### Cross-Sandbox Handoff Artifacts
+
+**File:** `backend/app/sandbox/artifact_transfer.py`
+
+When agents hand off work (Task → Research), files from the source sandbox can be transferred to the target sandbox.
+
+- `collect_artifacts(runtime, patterns, max_files=10, max_size_mb=50)` — find and upload files
+- `restore_artifacts(runtime, artifacts)` — download files into target sandbox
+- `cleanup_artifacts(artifacts)` — remove transferred files from storage after completion
+- Default patterns: `*.py`, `*.csv`, `*.json`, `*.txt`, `*.md`, `*.html`, `*.js`, `*.ts`
+- `HandoffInfo` includes optional `handoff_artifacts` field
+- Supervisor restores artifacts and appends summary to handoff context
+
+## Hybrid CodeAct Mode
+
+**File:** `backend/app/agents/tools/codeact.py`
+
+An opt-in `execute_script` tool that accepts multi-line Python scripts with access to a pre-installed `hyperagent` helper library in the sandbox. Gated behind `execution_mode: "codeact"` configuration.
+
+### Helper Library
+
+The `hyperagent` library (`backend/app/sandbox/hyperagent_lib/__init__.py`) is auto-installed in the sandbox on first use and provides:
+
+| Function | Description |
+|----------|-------------|
+| `hyperagent.web_search(query)` | Search the web |
+| `hyperagent.read_file(path)` | Read a file |
+| `hyperagent.write_file(path, content)` | Write a file |
+| `hyperagent.run_command(cmd)` | Run a shell command |
+| `hyperagent.browse(url)` | Fetch a URL |
+| `hyperagent.list_files(dir)` | List directory contents |
+
+### Execution Flow
+
+1. Agent emits `execute_script` tool call with multi-line Python `code`
+2. Sandbox session is retrieved or created (via `ExecutionSandboxManager`)
+3. `hyperagent` library installed if not already present (tracked per sandbox ID)
+4. Script written to `/tmp/hyperagent/current_script.py` and executed
+5. Returns JSON with `success`, `stdout`, `stderr`, `exit_code`, `created_files`
+
+### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `execution_mode` | `"standard"` | Set to `"codeact"` to enable `execute_script` tool |
+
 ## Event System
 
-24 event types streamed via SSE:
+30+ event types streamed via SSE:
 
 **Lifecycle:** `stage`, `complete`, `error`
 **Content:** `token`, `image`, `code_result`
@@ -314,6 +420,8 @@ Configured via `SANDBOX_PROVIDER` env var.
 **Sandbox:** `browser_stream`, `browser_action`, `workspace_update`, `terminal_command`, `terminal_output`, `terminal_error`, `terminal_complete`
 **Skills:** `skill_output`, `plan_step`
 **HITL:** `interrupt`, `interrupt_response`
+**Task Planning:** `plan_overview`, `plan_step_completed`, `todo_update`
+**Parallel Execution:** `parallel_start`, `parallel_task`, `parallel_complete`
 
 ## Context Compression
 
@@ -333,6 +441,7 @@ Configured via `SANDBOX_PROVIDER` env var.
 4. Inject summary as system context message
 5. Preserve tool message pairs (AIMessage + ToolMessage)
 6. Fall back to truncation if compression fails
+7. Maintain stable prefix hash across iterations to maximize KV-cache reuse
 
 ## Backward Compatibility
 

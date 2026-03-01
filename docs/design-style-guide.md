@@ -1,12 +1,12 @@
 # Frontend Style Guide
 
-A warm, minimal design system inspired by natural materials - terracotta accents, warm neutrals, flat design, and clarity over decoration.
+A modern, clean design system — teal/cyan accents, balanced cool neutrals, flat design, and clarity over decoration.
 
 ## Design Philosophy
 
 - **Radically Minimal** - No shadows, borders only where structure is needed
-- **Warm Neutrals** - Warm stone light theme, warm charcoal dark theme with subtle brown undertones
-- **Terracotta Primary** - Rich, earthy terracotta as the primary accent color for emphasis
+- **Cool Neutrals** - Cool slate-blue light theme, refined dark theme with blue-gray undertones (hue 230-250)
+- **Teal Primary** - Vibrant teal/cyan as the primary accent color for emphasis
 - **Semantic Tokens** - Use CSS variables for consistency across themes
 - **Ultra-Flat Design** - Borders for structure, no glows or effects
 - **Subtle Interactions** - Minimal hover states, focus on clarity over decoration
@@ -20,39 +20,39 @@ A warm, minimal design system inspired by natural materials - terracotta accents
 
 | Token | Light Mode | Dark Mode | Usage |
 |-------|------------|-----------|-------|
-| `bg-background` | Warm off-white (30 15% 98%) | Warm charcoal (25 8% 7%) | Page backgrounds |
-| `bg-card` | Warm white (30 10% 100%) | Deep warm black (25 10% 4%) | Editor areas (chat input, message list), cards, elevated surfaces |
-| `bg-secondary` | Warm beige (30 12% 96%) | Warm dark gray (25 6% 12%) | Sidebars, subtle backgrounds |
-| `bg-muted` | Warm taupe (28 10% 94%) | Warm dark brown (25 6% 14%) | Disabled states, read items |
-| `text-foreground` | Warm dark brown (25 8% 12%) | Warm off-white (30 10% 92%) | Primary text |
-| `text-muted-foreground` | Warm gray (25 5% 45%) | Warm gray (28 5% 50%) | Secondary text |
-| `border-border` | Warm light beige (28 8% 93%) | Warm dark brown (25 6% 16%) | Standard borders |
+| `bg-background` | Cool off-white (0.985 0.004 230) | Dark slate (0.18 0.008 250) | Page backgrounds |
+| `bg-card` | Near-white (0.993 0.002 230) | Deep slate (0.20 0.008 250) | Editor areas (chat input, message list), cards, elevated surfaces |
+| `bg-secondary` | Light gray (0.960 0.004 230) | Medium slate (0.24 0.008 250) | Sidebars, subtle backgrounds |
+| `bg-muted` | Soft gray (0.955 0.003 230) | Dark slate (0.16 0.004 250) | Disabled states, read items |
+| `text-foreground` | Dark charcoal (0.23 0.012 250) | Light gray (0.90 0.005 230) | Primary text |
+| `text-muted-foreground` | Mid gray (0.55 0.01 250) | Mid gray (0.58 0.008 250) | Secondary text |
+| `border-border` | Light border (0.925 0.004 230) | Dark border (0.28 0.008 250) | Standard borders |
 | `border-border/50` | 50% opacity | 50% opacity | Card borders, containers |
 | `border-border/30` | 30% opacity | 30% opacity | Dividers, separators |
-| `bg-primary` | Rich terracotta (18 65% 42%) | Bright terracotta (18 70% 58%) | Primary buttons, interactive accents |
-| `text-primary-foreground` | Warm white (30 10% 100%) | Deep warm black (25 10% 4%) | Text on primary |
-| `bg-destructive` | Red (0 72% 51%) | Red (0 72% 55%) | Error states, delete buttons |
+| `bg-primary` | Teal (0.609 0.113 221 / #0891B2) | Bright teal (0.796 0.134 212 / #22D3EE) | Primary buttons, interactive accents |
+| `text-primary-foreground` | White (1.00 0 0) | Dark slate (0.13 0.01 250) | Text on primary |
+| `bg-destructive` | Red (0.55 0.22 27) | Red (0.60 0.21 25) | Error states, delete buttons |
 | `text-destructive` | Red | Red | Error text, warning icons |
 
 ### Interactive States
 
-Interactive elements use terracotta primary for emphasis, warm neutrals for subtle states:
+Interactive elements use teal primary for emphasis, cool neutrals for subtle states:
 
 | State | Color Treatment |
 |-------|-----------------|
 | Default | `bg-card text-foreground` |
 | Hover | `bg-secondary text-foreground` or `bg-muted` |
-| Active/Selected Primary | `bg-primary text-primary-foreground` (terracotta accent) |
-| Active/Selected Subtle | `bg-secondary text-foreground` (warm neutral) |
-| Focus | `ring-2 ring-primary` (terracotta ring) |
+| Active/Selected Primary | `bg-primary text-primary-foreground` (teal accent) |
+| Active/Selected Subtle | `bg-secondary text-foreground` (cool neutral) |
+| Focus | `ring-2 ring-primary` (teal ring) |
 | Disabled | `opacity-50` |
 
-**Warm Accent Philosophy:**
-- Terracotta primary (`bg-primary`) for high-emphasis interactive elements (primary buttons, active states)
-- Warm neutrals for subtle states and secondary actions
+**Teal Accent Philosophy:**
+- Teal primary (`bg-primary`) for high-emphasis interactive elements (primary buttons, active states)
+- Cool neutrals for subtle states and secondary actions
 - No glows or decorative effects - flat design maintained
-- Focus on hierarchy through typography weight, spacing, and strategic use of terracotta
-- Links can use terracotta for emphasis or subtle underline for minimal style
+- Focus on hierarchy through typography weight, spacing, and strategic use of teal
+- Links can use teal for emphasis or subtle underline for minimal style
 
 ### Do's and Don'ts
 
@@ -73,19 +73,18 @@ className="hover:bg-gray-100 dark:hover:bg-gray-700"
 
 ### Font Family
 
-Uses native system fonts for optimal performance and a native feel on each platform:
-
 | Type | Stack | Renders As |
 |------|-------|------------|
-| `font-sans` | system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif | SF Pro (Mac), Segoe UI (Win), Roboto (Android) |
-| `font-mono` | ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace | SF Mono (Mac), Consolas (Win) |
+| `font-sans` | DM Sans, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif | DM Sans (loaded via next/font) |
+| `font-display` | DM Sans, system-ui, sans-serif | DM Sans (loaded via next/font) |
+| `font-mono` | JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace | JetBrains Mono (loaded via next/font) |
 
-**Brand Title Font:** Plus Jakarta Sans (loaded via next/font) - used for `.brand-title` class.
+**Brand Title Font:** DM Sans (loaded via next/font) - used for `.brand-title` class.
 
 **Benefits:**
-- No external font loading for body text (faster page loads)
-- Native look and feel on every platform
-- Excellent CJK support built into system fonts
+- Modern, geometric sans-serif with excellent readability
+- Clean, professional feel with good weight range (400-700)
+- Excellent Latin character support
 
 ### Font Size Scale
 
@@ -93,12 +92,12 @@ Uses native system fonts for optimal performance and a native feel on each platf
 |-------|------|-------|
 | `text-xs` | 12px | Minimum readable - captions, timestamps, badges |
 | `text-sm` | 14px | Secondary text, form labels |
-| `text-base` | 16px | Primary body text |
-| `text-lg` | 18px | Card titles, subsections |
-| `text-xl` | 20px | Section headers |
-| `text-2xl` | 24px | Page titles |
-| `text-3xl` | 30px | Hero titles |
-| `text-4xl` | 36px | Large hero titles |
+| `text-base` | 15px | Primary body text |
+| `text-lg` | 16px | Card titles, subsections |
+| `text-xl` | 18px | Section headers |
+| `text-2xl` | 20px | Page titles |
+| `text-3xl` | 24px | Hero titles |
+| `text-4xl` | 32px | Large hero titles |
 
 **Note:** Minimum font size is 12px (`text-xs`) for WCAG accessibility.
 
@@ -109,56 +108,55 @@ Uses native system fonts for optimal performance and a native feel on each platf
 | (default) | 400 | Body text, descriptions |
 | `font-medium` | 500 | Labels, buttons, primary status |
 | `font-semibold` | 600 | Headings, important CTAs |
-| `font-bold` | 700 | Page titles, strong emphasis |
-| `font-extrabold` | 800 | Brand titles (`.brand-title`) |
+| `font-bold` | 700 | Page titles, brand titles (`.brand-title`), strong emphasis |
 
 ## Color Palette
 
-### CSS Variables (Light Mode - Warm Stone)
+### CSS Variables (Light Mode - Cool Slate)
 
 ```css
---background: 30 15% 98%;     /* Warm off-white with peachy undertone - site background */
---foreground: 25 8% 12%;      /* Warm dark brown - primary text */
---primary: 18 65% 42%;        /* Rich terracotta - primary accent */
---primary-foreground: 30 10% 100%;  /* Warm white - text on terracotta */
---secondary: 30 12% 96%;      /* Warm beige */
---muted: 28 10% 94%;          /* Warm taupe */
---muted-foreground: 25 5% 45%;
---border: 28 8% 93%;          /* Warm light beige */
---card: 30 10% 100%;          /* Warm white - editor areas (chat input, message list) */
---ring: 18 55% 42%;           /* Terracotta focus ring */
+--background: 0.985 0.004 230;     /* Cool off-white - site background */
+--foreground: 0.23 0.012 250;      /* Dark charcoal - primary text */
+--primary: 0.609 0.113 221;        /* #0891B2 — logo teal */
+--primary-foreground: 1.00 0 0;    /* White - text on teal */
+--secondary: 0.960 0.004 230;      /* Light gray */
+--muted: 0.955 0.003 230;          /* Soft gray */
+--muted-foreground: 0.55 0.01 250;
+--border: 0.925 0.004 230;         /* Light border */
+--card: 0.993 0.002 230;           /* Near-white - editor areas */
+--ring: 0.609 0.113 221;           /* Logo teal focus ring */
 ```
 
-### CSS Variables (Dark Mode - Warm Charcoal)
+### CSS Variables (Dark Mode - Refined Slate)
 
 ```css
---background: 25 8% 7%;       /* Warm charcoal - site background */
---foreground: 30 10% 92%;     /* Warm off-white - primary text */
---primary: 18 70% 58%;        /* Bright terracotta - primary accent */
---primary-foreground: 25 10% 4%;  /* Deep warm black - text on terracotta */
---secondary: 25 6% 12%;       /* Warm dark gray */
---muted: 25 6% 14%;           /* Warm dark brown */
---muted-foreground: 28 5% 50%;
---border: 25 6% 16%;          /* Warm dark brown */
---card: 25 10% 4%;            /* Deep warm black - editor areas (chat input, message list) */
---ring: 18 60% 65%;           /* Lighter terracotta focus ring */
+--background: 0.18 0.008 250;      /* Dark slate - site background */
+--foreground: 0.90 0.005 230;      /* Light gray - primary text */
+--primary: 0.796 0.134 212;        /* #22D3EE — logo bright teal */
+--primary-foreground: 0.13 0.01 250;  /* Dark slate - text on teal */
+--secondary: 0.24 0.008 250;       /* Medium slate */
+--muted: 0.16 0.004 250;           /* Dark slate */
+--muted-foreground: 0.58 0.008 250;
+--border: 0.28 0.008 250;          /* Dark border */
+--card: 0.20 0.008 250;            /* Deep slate - editor areas */
+--ring: 0.796 0.134 212;           /* Logo bright teal focus ring */
 ```
 
 ### Status Colors (Both Themes)
 
-Use terracotta for primary actions, red for destructive states:
+Use teal for primary actions, red for destructive states:
 
 ```css
-/* Primary - terracotta accent */
---primary: 18 65% 42%;        /* Light mode - rich terracotta */
---primary: 18 70% 58%;        /* Dark mode - bright terracotta */
+/* Primary - teal accent (matches logo node colors) */
+--primary: 0.609 0.113 221;        /* Light mode — #0891B2 */
+--primary: 0.796 0.134 212;        /* Dark mode — #22D3EE */
 
 /* Destructive/Error - red */
---destructive: 0 72% 51%;     /* Light mode - red */
---destructive: 0 72% 55%;     /* Dark mode - red */
+--destructive: 0.55 0.22 27;       /* Light mode - red */
+--destructive: 0.60 0.21 25;       /* Dark mode - red */
 
-/* Success/Info use warm neutral foreground */
-/* Terracotta used for emphasis and primary actions */
+/* Success/Info use neutral foreground */
+/* Teal used for emphasis and primary actions */
 ```
 
 ## Brand Title
@@ -171,10 +169,10 @@ Brand titles use simple, clean typography with no gradients or effects:
 
 ```css
 .brand-title {
-  font-family: var(--font-plus-jakarta-sans), system-ui, sans-serif;
-  font-weight: 800;
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  font-weight: 700;
   letter-spacing: -0.04em;
-  color: hsl(var(--foreground));
+  color: oklch(var(--foreground));
   /* No gradients or effects */
 }
 ```
@@ -226,7 +224,7 @@ className="bg-secondary text-foreground hover:bg-muted border border-border/50 t
 ```
 **Usage:** Non-critical actions, form buttons, secondary CTAs
 
-#### Primary (Terracotta Accent)
+#### Primary (Teal Accent)
 ```tsx
 className="bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
 ```
@@ -268,7 +266,7 @@ size="icon"     // h-9 w-9 (square)
 ### Button Best Practices
 
 **DO:**
-- Use `variant="primary"` for primary CTAs (terracotta background)
+- Use `variant="primary"` for primary CTAs (teal background)
 - Keep transitions to `transition-colors` only
 - Use clear typography hierarchy instead of effects
 - Maintain 32px minimum touch targets
@@ -276,12 +274,12 @@ size="icon"     // h-9 w-9 (square)
 **DON'T:**
 - Don't use transform effects (scale, translate, rotate)
 - Don't use shadows except on destructive in rare cases
-- Don't use colors beyond terracotta primary and warm neutrals
+- Don't use colors beyond teal primary and cool neutrals
 - Don't add glow effects or decorative elements
 
 ## Focus States
 
-Use terracotta rings for focus states, no glow effects:
+Use teal rings for focus states, no glow effects:
 
 ```tsx
 // Focus ring (for all interactive elements)
@@ -289,7 +287,7 @@ className="focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-of
 ```
 
 **Focus Ring Philosophy:**
-- Use warm terracotta `ring-primary` for accessibility and brand consistency
+- Use teal `ring-primary` for accessibility and brand consistency
 - Never use box-shadow or glow effects
 - Ring offset of 2px for clear separation
 - Remove default outline with `outline-none`
@@ -410,7 +408,7 @@ className="border border-border"
 className="border border-foreground/15"  // For selection states with low opacity
 
 // DON'T: Use thicker borders
-className="border-2 border-border"  // ❌ Never use border-2 or thicker
+className="border-2 border-border"  // Never use border-2 or thicker
 ```
 
 **Border Opacity Guidelines:**
@@ -603,9 +601,9 @@ className="transition-colors duration-150"
 - Complex multi-property animations
 
 **Minimal interaction philosophy:**
-- Hover: Background color change only (warm neutrals)
-- Active: Terracotta primary for high-emphasis states
-- Focus: Terracotta ring (via `ring-primary`)
+- Hover: Background color change only (cool neutrals)
+- Active: Teal primary for high-emphasis states
+- Focus: Teal ring (via `ring-primary`)
 - Loading: Simple opacity fade
 
 ## Touch Targets
@@ -661,12 +659,12 @@ Custom scrollbar styling (6px width, subtle appearance):
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--border));
+  background: oklch(var(--border));
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.3);
+  background: oklch(var(--muted-foreground) / 0.3);
 }
 ```
 
@@ -695,18 +693,18 @@ className="font-medium text-foreground"
 
 ## Key Principles
 
-1. **Warm neutrals throughout** - Subtle brown undertones (18-30° hue) create organic, inviting feel
-2. **Terracotta primary accent** - Rich, earthy terracotta (18 65% 42%) for emphasis and primary actions
+1. **Cool neutrals throughout** - Subtle blue-gray undertones (hue 230-250) create a modern, professional feel
+2. **Teal primary accent** - Vibrant teal (0.58 0.12 195 OKLCH) for emphasis and primary actions
 3. **No decorative effects** - No shadows, glows, gradients, or transforms - maintain flat design
-4. **Borders for structure** - Never use shadows, always use subtle warm-toned borders
+4. **Borders for structure** - Never use shadows, always use subtle cool-toned borders
 5. **Semantic tokens only** - Never hardcode hex/rgb values in components
 6. **Consistent spacing** - Use Tailwind's spacing scale (p-4, p-6, gap-3, etc.)
 7. **Accessible** - 32px minimum touch targets, 12px minimum font size, WCAG AAA contrast
 8. **Color transitions only** - `transition-colors` for all interactions, no transforms
-9. **Terracotta focus rings** - Use `ring-2 ring-primary` for accessibility and brand consistency
-10. **Typography for hierarchy** - Use weight/size for distinction, strategic terracotta for emphasis
+9. **Teal focus rings** - Use `ring-2 ring-primary` for accessibility and brand consistency
+10. **Typography for hierarchy** - Use weight/size for distinction, strategic teal for emphasis
 11. **Border radius hierarchy** - xl (containers) > lg (buttons) > md (pills)
 12. **Minimal is better** - When in doubt, remove decoration
-13. **Warm aesthetic** - All neutrals have brown undertones for cohesive warmth
+13. **Cool aesthetic** - All neutrals have blue-gray undertones for cohesive modernity
 14. **Flat design** - Strictly 2D, no depth effects
 15. **Clarity over decoration** - Functionality and usability trump visual flourish

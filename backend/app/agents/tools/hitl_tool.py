@@ -8,11 +8,10 @@ This tool allows agents to pause and ask users for:
 The agent calls this tool when it needs user guidance to proceed.
 """
 
-from typing import Any, Literal
+from typing import Literal
 
 from langchain_core.tools import tool
 
-from app.agents.events import InterruptType
 from app.agents.hitl.interrupt_manager import (
     create_decision_interrupt,
     create_input_interrupt,
@@ -96,16 +95,16 @@ async def ask_user(
     if context:
         message = f"{context}\n\n{question}"
 
-    # Handle confirmation type by converting to decision
-    if question_type == "confirmation":
-        options = [
-            {"label": "Yes", "value": "yes", "description": "Proceed with the action"},
-            {"label": "No", "value": "no", "description": "Cancel the action"},
-        ]
-        question_type = "decision"
-
     # Create the appropriate interrupt
-    if question_type == "decision":
+    if question_type == "confirmation":
+        from app.agents.hitl.interrupt_manager import create_confirm_interrupt
+
+        interrupt_event = create_confirm_interrupt(
+            title="Confirmation",
+            message=message,
+            timeout_seconds=timeout,
+        )
+    elif question_type == "decision":
         if not options:
             return "Error: decision type requires options"
         interrupt_event = create_decision_interrupt(
@@ -159,6 +158,14 @@ async def ask_user(
                 value=value[:50] if value else None,
             )
             return value or "skipped"
+        elif action in ("approve", "deny"):
+            logger.info(
+                "hitl_user_confirmed",
+                interrupt_id=interrupt_id,
+                action=action,
+                value=value,
+            )
+            return value or ("yes" if action == "approve" else "no")
         else:
             return f"unknown_action:{action}"
 

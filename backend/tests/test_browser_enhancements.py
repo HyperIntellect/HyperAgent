@@ -7,6 +7,7 @@ import pytest
 
 from app.agents.tools.browser_use import (
     browser_console_exec,
+    browser_dom_query,
     browser_select_option,
     browser_wait_for_element,
 )
@@ -349,6 +350,61 @@ class TestBrowserWaitForElement:
 
 
 # ---------------------------------------------------------------------------
+# browser_dom_query tests
+# ---------------------------------------------------------------------------
+
+
+class TestBrowserDomQuery:
+    """Tests for browser_dom_query tool."""
+
+    @pytest.mark.asyncio
+    async def test_dom_query_success(self, mock_desktop_manager, mock_executor):
+        """Successfully query matching elements."""
+        mock_executor.run_command.return_value = (
+            json.dumps({
+                "value": json.dumps({
+                    "count": 2,
+                    "selector": ".item",
+                    "items": [{"tag": "a", "text": "First"}, {"tag": "a", "text": "Second"}],
+                }),
+                "type": "string",
+            }),
+            "",
+            0,
+        )
+        p1, p2 = _patch_browser(mock_desktop_manager)
+        with p1, p2:
+            result = json.loads(await browser_dom_query.ainvoke({"selector": ".item"}))
+
+        assert result["success"] is True
+        assert result["count"] == 2
+        assert len(result["items"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_dom_query_no_session(self, mock_desktop_manager):
+        """Returns error when no browser session exists."""
+        mock_desktop_manager.get_session.return_value = None
+        p1, p2 = _patch_browser(mock_desktop_manager)
+        with p1, p2:
+            result = json.loads(await browser_dom_query.ainvoke({"selector": ".item"}))
+
+        assert result["success"] is False
+        assert "No active browser sandbox session" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_dom_query_sandbox_unavailable(self):
+        """Returns error when desktop sandbox is unavailable."""
+        with patch(
+            "app.agents.tools.browser_use.is_desktop_sandbox_available",
+            return_value=False,
+        ):
+            result = json.loads(await browser_dom_query.ainvoke({"selector": ".item"}))
+
+        assert result["success"] is False
+        assert "not available" in result["error"].lower()
+
+
+# ---------------------------------------------------------------------------
 # Registry integration tests
 # ---------------------------------------------------------------------------
 
@@ -364,6 +420,7 @@ class TestBrowserEnhancementsRegistry:
         tool_names = {t.name for t in browser_tools}
 
         assert "browser_console_exec" in tool_names
+        assert "browser_dom_query" in tool_names
         assert "browser_select_option" in tool_names
         assert "browser_wait_for_element" in tool_names
 
@@ -373,6 +430,7 @@ class TestBrowserEnhancementsRegistry:
 
         tool_names = get_tool_names_for_agent("task")
         assert "browser_console_exec" in tool_names
+        assert "browser_dom_query" in tool_names
         assert "browser_select_option" in tool_names
         assert "browser_wait_for_element" in tool_names
 
@@ -382,5 +440,6 @@ class TestBrowserEnhancementsRegistry:
 
         tool_names = get_tool_names_for_agent("research")
         assert "browser_console_exec" in tool_names
+        assert "browser_dom_query" in tool_names
         assert "browser_select_option" in tool_names
         assert "browser_wait_for_element" in tool_names

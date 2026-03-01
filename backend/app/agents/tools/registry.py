@@ -11,10 +11,18 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 from app.agents.state import AgentType
+from app.agents.policy.contracts import (
+    CapabilityContract,
+    DataSensitivity,
+    NetworkScope,
+    SideEffectLevel,
+)
 from app.agents.tools.app_builder import get_app_builder_tools
+from app.agents.tools.codeact import execute_script
 from app.agents.tools.browser_use import (
     browser_click,
     browser_console_exec,
+    browser_dom_query,
     browser_get_accessibility_tree,
     browser_get_stream_url,
     browser_navigate,
@@ -50,7 +58,7 @@ from app.agents.tools.skill_invocation import get_skill_tools
 from app.agents.tools.slide_generation import generate_slides
 from app.agents.tools.tool_search import search_tools
 from app.agents.tools.vision import analyze_image
-from app.agents.tools.web_search import web_search
+from app.agents.tools.web_search import web_extract_structured, web_search
 from app.core.logging import get_logger
 from app.sandbox import sandbox_file
 
@@ -78,12 +86,13 @@ class ToolCategory(str, Enum):
     NOTIFICATION = "notification"  # Notifications and webhooks
     TOOL_SEARCH = "tool_search"  # Meta-tool for discovering tools
     MCP = "mcp"  # MCP (Model Context Protocol) tools from external servers
+    CODEACT = "codeact"  # CodeAct hybrid execution (multi-line Python with helpers)
 
 
 # Tool instances by category
 # Note: Some tools may belong to multiple categories
 TOOL_CATALOG: dict[ToolCategory, list[BaseTool]] = {
-    ToolCategory.SEARCH: [web_search],
+    ToolCategory.SEARCH: [web_search, web_extract_structured],
     ToolCategory.IMAGE: [generate_image, analyze_image],
     ToolCategory.SLIDES: [generate_slides],
     ToolCategory.BROWSER: [
@@ -97,6 +106,7 @@ TOOL_CATALOG: dict[ToolCategory, list[BaseTool]] = {
         browser_console_exec,
         browser_select_option,
         browser_wait_for_element,
+        browser_dom_query,
         browser_get_accessibility_tree,
     ],
     ToolCategory.CODE_EXEC: [execute_code],
@@ -133,7 +143,140 @@ TOOL_CATALOG: dict[ToolCategory, list[BaseTool]] = {
     ToolCategory.TOOL_SEARCH: [search_tools],
     # MCP tools - dynamically populated via register_tool()
     ToolCategory.MCP: [],
+    # CodeAct - multi-line Python execution with helper library
+    ToolCategory.CODEACT: [execute_script],
 }
+
+
+# Capability contracts used by policy engine and startup validation.
+TOOL_CONTRACTS: dict[str, CapabilityContract] = {
+    "web_search": CapabilityContract(SideEffectLevel.NONE, DataSensitivity.PUBLIC, NetworkScope.EXTERNAL, True),
+    "web_extract_structured": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.PUBLIC, NetworkScope.EXTERNAL, True
+    ),
+    "generate_image": CapabilityContract(
+        SideEffectLevel.LOW, DataSensitivity.INTERNAL, NetworkScope.EXTERNAL, False
+    ),
+    "analyze_image": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.SENSITIVE, NetworkScope.NONE, True
+    ),
+    "generate_slides": CapabilityContract(
+        SideEffectLevel.MEDIUM, DataSensitivity.INTERNAL, NetworkScope.EXTERNAL, False
+    ),
+    "execute_code": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "sandbox_file": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "file_read": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, True
+    ),
+    "file_write": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "file_str_replace": CapabilityContract(
+        SideEffectLevel.MEDIUM, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "file_find_by_name": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.INTERNAL, NetworkScope.SANDBOX_ONLY, True
+    ),
+    "file_find_in_content": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, True
+    ),
+    "shell_exec": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "shell_view": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.INTERNAL, NetworkScope.SANDBOX_ONLY, True
+    ),
+    "shell_wait": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.INTERNAL, NetworkScope.SANDBOX_ONLY, True
+    ),
+    "shell_kill": CapabilityContract(
+        SideEffectLevel.MEDIUM, DataSensitivity.INTERNAL, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "invoke_skill": CapabilityContract(
+        SideEffectLevel.MEDIUM, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "list_skills": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.INTERNAL, NetworkScope.NONE, True
+    ),
+    "ask_user": CapabilityContract(SideEffectLevel.NONE, DataSensitivity.INTERNAL, NetworkScope.NONE, True),
+    "deploy_expose_port": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.EXTERNAL, False
+    ),
+    "deploy_get_url": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.INTERNAL, NetworkScope.EXTERNAL, True
+    ),
+    "deploy_to_production": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.EXTERNAL, False
+    ),
+    "http_request": CapabilityContract(
+        SideEffectLevel.MEDIUM, DataSensitivity.INTERNAL, NetworkScope.EXTERNAL, False
+    ),
+    "execute_sql": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "send_notification": CapabilityContract(
+        SideEffectLevel.MEDIUM, DataSensitivity.INTERNAL, NetworkScope.EXTERNAL, False
+    ),
+    "search_tools": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.INTERNAL, NetworkScope.NONE, True
+    ),
+    "create_app_project": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "app_list_files": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, True
+    ),
+    "app_read_file": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, True
+    ),
+    "app_write_file": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "app_run_command": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "app_install_packages": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "app_start_server": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "app_stop_server": CapabilityContract(
+        SideEffectLevel.MEDIUM, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+    "app_get_preview_url": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.INTERNAL, NetworkScope.EXTERNAL, True
+    ),
+    "execute_script": CapabilityContract(
+        SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
+    ),
+}
+
+# Browser tools are all high-impact.
+for _browser_tool_name in (
+    "browser_navigate",
+    "browser_screenshot",
+    "browser_click",
+    "browser_type",
+    "browser_press_key",
+    "browser_scroll",
+    "browser_get_stream_url",
+    "browser_console_exec",
+    "browser_select_option",
+    "browser_wait_for_element",
+    "browser_dom_query",
+    "browser_get_accessibility_tree",
+):
+    TOOL_CONTRACTS[_browser_tool_name] = CapabilityContract(
+        SideEffectLevel.HIGH,
+        DataSensitivity.SENSITIVE,
+        NetworkScope.EXTERNAL,
+        False,
+    )
 
 
 # Define which tool categories each agent type can access
@@ -183,6 +326,7 @@ def get_tools_by_category(category: ToolCategory) -> list[BaseTool]:
 def get_tools_for_agent(
     agent_type: str,
     include_handoffs: bool = True,
+    execution_mode: str | None = None,
 ) -> list[BaseTool]:
     """Get all tools available to a specific agent type.
 
@@ -192,11 +336,22 @@ def get_tools_for_agent(
     Args:
         agent_type: The agent type (e.g., "task", "research")
         include_handoffs: Whether to include handoff tools
+        execution_mode: Optional execution mode; when "codeact", includes
+            the CodeAct execute_script tool for the task agent
 
     Returns:
         List of tools available to the agent
     """
-    allowed_categories = AGENT_TOOL_MAPPING.get(agent_type, [])
+    allowed_categories = list(AGENT_TOOL_MAPPING.get(agent_type, []))
+
+    # Add CodeAct category when execution_mode is "codeact" for the task agent
+    if (
+        execution_mode == "codeact"
+        and agent_type == AgentType.TASK.value
+        and ToolCategory.CODEACT not in allowed_categories
+    ):
+        allowed_categories.append(ToolCategory.CODEACT)
+
     tools: list[BaseTool] = []
     seen_names: set[str] = set()
 
@@ -272,6 +427,14 @@ def register_tool(category: ToolCategory, tool: BaseTool) -> None:
     existing_names = {t.name for t in TOOL_CATALOG[category]}
     if tool.name not in existing_names:
         TOOL_CATALOG[category].append(tool)
+        if tool.name not in TOOL_CONTRACTS:
+            # Dynamic MCP tools default to medium-risk external contract unless explicitly set.
+            TOOL_CONTRACTS[tool.name] = CapabilityContract(
+                SideEffectLevel.MEDIUM,
+                DataSensitivity.INTERNAL,
+                NetworkScope.EXTERNAL,
+                False,
+            )
         logger.info(
             "tool_registered",
             category=category.value,
@@ -322,6 +485,76 @@ def get_all_tools() -> list[BaseTool]:
                 seen_names.add(tool.name)
 
     return tools
+
+
+def get_tool_contract(tool_name: str) -> CapabilityContract | None:
+    """Get capability contract metadata for a tool."""
+    return TOOL_CONTRACTS.get(tool_name)
+
+
+def validate_tool_contracts() -> None:
+    """Fail loudly if any registered tool is missing a capability contract."""
+    missing = sorted(
+        tool.name
+        for tool in get_all_tools()
+        if tool.name not in TOOL_CONTRACTS
+    )
+    if missing:
+        raise RuntimeError(f"Missing capability contracts for tools: {missing}")
+
+
+# Soft-disabled tools: instead of removing from the schema (which
+# invalidates the KV-cache prefix), we keep the tool definition and
+# inject a system message telling the model not to use it.
+_soft_disabled_tools: set[str] = set()
+
+
+def soft_disable_tool(tool_name: str) -> None:
+    """Mark a tool as soft-disabled.
+
+    The tool schema remains in the prefix for KV-cache stability,
+    but a system message is injected advising the model not to use it.
+
+    Args:
+        tool_name: Name of the tool to soft-disable
+    """
+    _soft_disabled_tools.add(tool_name)
+    logger.info("tool_soft_disabled", tool=tool_name)
+
+
+def soft_enable_tool(tool_name: str) -> None:
+    """Re-enable a previously soft-disabled tool.
+
+    Args:
+        tool_name: Name of the tool to re-enable
+    """
+    _soft_disabled_tools.discard(tool_name)
+    logger.info("tool_soft_enabled", tool=tool_name)
+
+
+def get_soft_disabled_tools() -> set[str]:
+    """Return the set of currently soft-disabled tool names."""
+    return _soft_disabled_tools.copy()
+
+
+def get_soft_disabled_message(disabled_tools: list[str] | set[str] | None = None) -> str | None:
+    """Build a system message listing soft-disabled tools.
+
+    Args:
+        disabled_tools: Explicit list of tool names; defaults to _soft_disabled_tools
+
+    Returns:
+        A message string, or None if no tools are disabled
+    """
+    tools = disabled_tools if disabled_tools is not None else _soft_disabled_tools
+    if not tools:
+        return None
+    tool_list = ", ".join(sorted(tools))
+    return (
+        f"[Tool Availability Notice] The following tools are currently unavailable "
+        f"and must NOT be called: {tool_list}. "
+        f"Use alternative tools or approaches instead."
+    )
 
 
 def get_tool_info() -> dict[str, Any]:

@@ -85,7 +85,10 @@ HyperAgent/
 │   ├── app/
 │   │   ├── routers/      # API endpoints
 │   │   ├── agents/       # LangGraph agents
-│   │   ├── services/     # Business logic
+│   │   │   └── tools/    # Tool implementations (incl. codeact.py)
+│   │   ├── sandbox/      # Sandbox managers (unified, execution, app, desktop)
+│   │   │   └── hyperagent_lib/  # Helper library for CodeAct mode
+│   │   ├── services/     # Business logic (incl. snapshot_service.py)
 │   │   └── models/       # Pydantic schemas
 │   └── pyproject.toml
 │
@@ -115,6 +118,10 @@ HyperAgent/
 | `DATABASE_URL` | PostgreSQL connection | No |
 | `REDIS_URL` | Redis connection | No |
 | `E2B_API_KEY` | E2B sandbox API key | No |
+| `SANDBOX_PROVIDER` | Sandbox provider (`e2b` or `boxlite`) | No |
+| `SNAPSHOT_MAX_SIZE_BYTES` | Max snapshot size (default: 100MB) | No |
+| `SNAPSHOT_RETENTION_HOURS` | Snapshot retention (default: 24h) | No |
+| `STORAGE_BACKEND` | Storage backend (`r2` or `local`) | No |
 | `CORS_ORIGINS` | Allowed origins | No |
 
 *At least one LLM provider key is required.

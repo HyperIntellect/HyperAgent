@@ -95,6 +95,11 @@ class ImageGenerationSkill(ToolSkill):
             },
         },
         required_tools=[],
+        risk_level="medium",
+        side_effect_level="low",
+        data_sensitivity="internal",
+        network_scope="external",
+        idempotency_hint=False,
         max_iterations=1,
         tags=["image", "creative", "generation", "ai-art"],
     )

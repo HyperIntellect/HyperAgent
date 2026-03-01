@@ -2,7 +2,10 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import { useTranslations } from "next-intl";
-import { Check, AlertCircle, ChevronRight, Globe, ExternalLink } from "lucide-react";
+import {
+    Check, AlertCircle, ChevronDown, Globe, ExternalLink,
+    Search, Terminal, FileText, Sparkles, Wrench, ImageIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TimestampedEvent } from "@/lib/stores/agent-progress-store";
 import type { Source, AgentEvent } from "@/lib/types";
@@ -242,8 +245,28 @@ function getStageDescription(
         if (translated && translated.trim()) return translated;
     }
 
-    // Check if description matches "Executing {tool}" pattern and translate it
+    // Handle skill_*:node_name format (e.g. "skill_app_builder:scaffold")
+    // Extract the node name suffix and try known stage translation
+    if (stageName.includes(":")) {
+        const nodeName = stageName.split(":").pop() || "";
+        if (KNOWN_STAGES.includes(nodeName)) {
+            const translated = tryTranslate(tStages, `${nodeName}.${status}`, "chat.agent.stages");
+            if (translated && translated.trim()) return translated;
+        }
+    }
+
+    // Check if description matches "Running {node}" or "Executing {tool}" and translate
     if (stage.description) {
+        // Handle "Running {node_name}" from skill executor
+        const runningMatch = stage.description.match(/^Running (.+)$/i);
+        if (runningMatch) {
+            const nodeName = runningMatch[1];
+            if (KNOWN_STAGES.includes(nodeName)) {
+                const translated = tryTranslate(tStages, `${nodeName}.${status}`, "chat.agent.stages");
+                if (translated && translated.trim()) return translated;
+            }
+        }
+
         const executingMatch = stage.description.match(/^Executing (.+)$/i);
         if (executingMatch && t && tTools) {
             const toolNameRaw = executingMatch[1];
@@ -335,12 +358,14 @@ function getToolDisplayName(
 }
 
 // Animated pulsing dot for running state
-function PulsingDot() {
+function PulsingDot({ size = "md" }: { size?: "sm" | "md" }) {
+    const outer = size === "sm" ? "w-4 h-4" : "w-5 h-5";
+    const inner = size === "sm" ? "h-2 w-2" : "h-2.5 w-2.5";
     return (
-        <span className="w-5 h-5 flex items-center justify-center">
-            <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-40" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-primary" />
+        <span className={cn(outer, "flex items-center justify-center")}>
+            <span className={cn("relative flex", inner)}>
+                <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-40")} />
+                <span className={cn("relative inline-flex rounded-full bg-primary", inner)} />
             </span>
         </span>
     );
@@ -366,29 +391,32 @@ function LiveDuration({ startMs, endMs }: { startMs: number; endMs?: number }) {
     return <span className="tabular-nums text-xs font-medium text-muted-foreground/70">{minutes}:{secs.toString().padStart(2, '0')}</span>;
 }
 
-// Status indicator component
-function StatusIndicator({ status }: { status: "pending" | "running" | "completed" | "failed" }) {
+// Stage status icon — simplified, no ring
+function StageStatusIcon({ status, muted = false }: { status: "pending" | "running" | "completed" | "failed"; muted?: boolean }) {
     if (status === "running") {
-        return <PulsingDot />;
+        return <PulsingDot size="sm" />;
     }
 
     if (status === "completed") {
         return (
-            <div className="w-5 h-5 rounded-full bg-success/20 flex items-center justify-center ring-1 ring-success/30">
-                <Check className="w-3 h-3 text-success" strokeWidth={2.5} />
+            <div className={cn(
+                "w-4 h-4 rounded-full flex items-center justify-center",
+                muted ? "bg-muted" : "bg-success/15"
+            )}>
+                <Check className={cn("w-2.5 h-2.5", muted ? "text-muted-foreground" : "text-success")} strokeWidth={2.5} />
             </div>
         );
     }
 
     if (status === "failed") {
         return (
-            <div className="w-5 h-5 rounded-full bg-destructive/20 flex items-center justify-center ring-1 ring-destructive/30">
-                <AlertCircle className="w-3 h-3 text-destructive" strokeWidth={2.5} />
+            <div className="w-4 h-4 rounded-full bg-destructive/15 flex items-center justify-center">
+                <AlertCircle className="w-2.5 h-2.5 text-destructive" strokeWidth={2.5} />
             </div>
         );
     }
 
-    return <div className="w-2.5 h-2.5 rounded-full bg-muted-foreground/25 ml-[5px]" />;
+    return <div className="w-2 h-2 rounded-full bg-muted-foreground/25 ml-1" />;
 }
 
 // Group tools by name and count them
@@ -435,16 +463,120 @@ function groupTools(
     return Array.from(toolMap.values());
 }
 
-// Stage item with tools
-function StageItem({
+// Tool icon component — maps tool names to Lucide icons
+function ToolIcon({ name: toolName, className }: { name: string; className?: string }) {
+    const cls = className || "w-3 h-3 flex-shrink-0 text-muted-foreground/70";
+    const n = toolName.toLowerCase();
+    if (n === "web_search" || n === "google_search" || n.includes("search")) return <Search className={cls} />;
+    if (n === "execute_code" || n === "app_run_command" || n.includes("execute")) return <Terminal className={cls} />;
+    if (n === "app_write_file" || n === "app_read_file" || n.includes("sandbox_file") || n.includes("file")) return <FileText className={cls} />;
+    if (n === "invoke_skill" || n.startsWith("invoke_skill:")) return <Sparkles className={cls} />;
+    if (n.startsWith("browser_") || n === "browser") return <Globe className={cls} />;
+    if (n === "generate_image" || n === "analyze_image" || n.includes("image")) return <ImageIcon className={cls} />;
+    return <Wrench className={cls} />;
+}
+
+// Compute stage status from group data
+function computeStageStatus(
+    group: StageGroup,
+    isHistorical: boolean,
+    isStreaming: boolean
+): "pending" | "running" | "completed" | "failed" {
+    if (group.stage.status === "failed") return "failed";
+    if (isHistorical) return "completed";
+
+    const hasTools = group.tools.length > 0;
+    const allToolsCompleted = hasTools && group.tools.every(t => {
+        const endTs = getEventEndTimestamp(t);
+        return endTs !== undefined || t.status === "completed";
+    });
+    const stageEndTs = getEventEndTimestamp(group.stage);
+
+    if (group.stage.status === "completed" || stageEndTs !== undefined || allToolsCompleted || !isStreaming) {
+        return "completed";
+    }
+    if (group.stage.status === "running") return "running";
+    return "pending";
+}
+
+// Rounded pill badge for a single tool
+function ToolChip({ name, displayName, active }: { name: string; displayName: string; active?: boolean }) {
+    return (
+        <span className={cn(
+            "inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg border border-border/50 max-w-[260px]",
+            active ? "bg-secondary" : "bg-secondary/50"
+        )}>
+            <ToolIcon name={name} />
+            <span className="truncate text-muted-foreground/80">{displayName}</span>
+        </span>
+    );
+}
+
+// Render tools as pill chips — group when > 6
+function ToolChipList({ tools, tTools, isHistorical }: {
+    tools: ProgressEvent[];
+    tTools?: ReturnType<typeof useTranslations>;
+    isHistorical: boolean;
+}) {
+    if (tools.length === 0) return null;
+
+    if (tools.length <= 6) {
+        // Render individual pills
+        return (
+            <div className="flex flex-wrap gap-1.5">
+                {tools.map((tool, idx) => {
+                    const toolName = tool.tool || tool.name || "unknown";
+                    const skillId = toolName === "invoke_skill"
+                        ? (tool.args?.skill_id as string | undefined)
+                        : undefined;
+                    const display = getToolDisplayName(toolName, tTools, skillId);
+                    const endTs = getEventEndTimestamp(tool);
+                    const isActive = !isHistorical && tool.status !== "completed" && endTs === undefined;
+                    return (
+                        <ToolChip
+                            key={`tool-${idx}`}
+                            name={skillId ? `invoke_skill:${skillId}` : toolName}
+                            displayName={display}
+                            active={isActive}
+                        />
+                    );
+                })}
+            </div>
+        );
+    }
+
+    // Group by name when > 6 tools
+    const grouped = groupTools(tools, tTools, isHistorical);
+    return (
+        <div className="flex flex-wrap gap-1.5">
+            {grouped.map((g) => (
+                <span
+                    key={g.name}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg border border-border/50 bg-secondary/50 max-w-[260px]"
+                >
+                    <ToolIcon name={g.name} />
+                    <span className="truncate text-muted-foreground/80">{g.displayName}</span>
+                    {g.count > 1 && (
+                        <span className="tabular-nums text-[10px] font-semibold text-muted-foreground/60 bg-muted/80 px-1.5 py-0.5 rounded-md leading-none">
+                            {g.completedCount}/{g.count}
+                        </span>
+                    )}
+                </span>
+            ))}
+        </div>
+    );
+}
+
+// Collapsible stage section (accordion)
+function StageSection({
     label,
     status,
     duration,
     tools,
     reasoningEvents,
     tTools,
-    isLast,
     isHistorical = false,
+    defaultExpanded = false,
 }: {
     label: string;
     status: "pending" | "running" | "completed" | "failed";
@@ -452,100 +584,79 @@ function StageItem({
     tools?: ProgressEvent[];
     reasoningEvents?: ProgressEvent[];
     tTools?: ReturnType<typeof useTranslations>;
-    isLast: boolean;
     isHistorical?: boolean;
+    defaultExpanded?: boolean;
 }) {
-    const groupedTools = useMemo(() => {
-        if (!tools || tools.length === 0) return [];
-        return groupTools(tools, tTools, isHistorical);
-    }, [tools, tTools, isHistorical]);
+    const [isOpen, setIsOpen] = useState(() => defaultExpanded || status === "running");
 
-    const hasTools = groupedTools.length > 0;
-
-    // Only show duration if we have valid timestamps and not in historical mode
+    const hasContent = (tools && tools.length > 0) || (reasoningEvents && reasoningEvents.length > 0);
     const showDuration = !isHistorical && duration?.start !== undefined;
 
     return (
-        <div className="relative">
-            {/* Vertical connector line - thicker, more visible */}
-            {!isLast && (
-                <div className="absolute left-[9px] top-7 bottom-0 w-[2px] bg-border/50" />
-            )}
-
-            <div className="flex items-start gap-4 py-2.5">
-                {/* Status indicator */}
-                <div className="flex-shrink-0 mt-0.5">
-                    <StatusIndicator status={status} />
+        <div className="py-1.5">
+            {/* Stage header */}
+            <button
+                className="flex items-center gap-2.5 w-full text-left group hover:opacity-80"
+                onClick={() => hasContent && setIsOpen(!isOpen)}
+            >
+                <div className="flex-shrink-0">
+                    <StageStatusIcon status={status} muted={isHistorical && status === "completed"} />
                 </div>
 
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                    <div className="flex items-baseline justify-between gap-3 mb-0.5">
-                        <span className={cn(
-                            "text-sm leading-snug font-medium tracking-tight",
-                            status === "running" && "text-foreground",
-                            status === "completed" && "text-muted-foreground/80",
-                            status === "failed" && "text-destructive font-semibold",
-                            status === "pending" && "text-muted-foreground/40"
-                        )}>
-                            {label}
-                        </span>
-                        {showDuration && duration?.start !== undefined && (
-                            <div className="flex-shrink-0">
-                                <LiveDuration startMs={duration.start} endMs={duration.end} />
-                            </div>
-                        )}
+                <span className={cn(
+                    "flex-1 text-base leading-snug font-semibold tracking-tight min-w-0 truncate",
+                    status === "running" && "text-foreground",
+                    status === "completed" && (isHistorical ? "text-muted-foreground/70" : "text-muted-foreground/80"),
+                    status === "failed" && "text-destructive",
+                    status === "pending" && "text-muted-foreground/40"
+                )}>
+                    {label}
+                </span>
+
+                {showDuration && duration?.start !== undefined && (
+                    <div className="flex-shrink-0">
+                        <LiveDuration startMs={duration.start} endMs={duration.end} />
                     </div>
+                )}
 
-                    {/* Tools - vertical display, grouped by name */}
-                    {hasTools && (
-                        <div className="mt-2.5 space-y-1.5">
-                            {groupedTools.map((groupedTool) => (
-                                <div
-                                    key={groupedTool.name}
-                                    className="flex items-center gap-2.5 pl-0.5"
-                                >
-                                    <span className="w-1 h-1 rounded-full bg-muted-foreground/30 flex-shrink-0" />
-                                    <span className="text-xs text-muted-foreground/70 leading-relaxed">
-                                        {groupedTool.count > 1 ? (
-                                            <>
-                                                <span className="text-muted-foreground/50 tabular-nums font-medium">
-                                                    {groupedTool.completedCount}/{groupedTool.count}
-                                                </span>
-                                                {" · "}{groupedTool.displayName}
-                                            </>
-                                        ) : (
-                                            groupedTool.displayName
-                                        )}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                {hasContent && (
+                    <ChevronDown className={cn(
+                        "w-3.5 h-3.5 text-muted-foreground/50 flex-shrink-0 transition-transform duration-200",
+                        !isOpen && "-rotate-90"
+                    )} />
+                )}
+            </button>
 
-                    {/* Reasoning events - subtle inline display */}
-                    {reasoningEvents && reasoningEvents.length > 0 && (
-                        <div className="mt-2 space-y-1">
-                            {reasoningEvents.map((re, idx) => (
-                                <div
-                                    key={`reasoning-${idx}`}
-                                    className="flex items-start gap-2 pl-0.5"
-                                >
-                                    <span className="w-1 h-1 rounded-full bg-primary/30 flex-shrink-0 mt-1.5" />
-                                    <span className="text-xs text-muted-foreground/60 italic leading-relaxed">
-                                        {re.thinking}
-                                    </span>
+            {/* Accordion content */}
+            {hasContent && (
+                <div className={cn("accordion-grid", isOpen && "accordion-open")}>
+                    <div className="accordion-inner">
+                        <div className="pl-[26px] pt-2 space-y-2.5">
+                            {tools && tools.length > 0 && (
+                                <ToolChipList tools={tools} tTools={tTools} isHistorical={isHistorical} />
+                            )}
+
+                            {reasoningEvents && reasoningEvents.length > 0 && (
+                                <div className="space-y-1">
+                                    {reasoningEvents.map((re, idx) => (
+                                        <p
+                                            key={`reasoning-${idx}`}
+                                            className="text-xs text-muted-foreground/60 italic leading-relaxed"
+                                        >
+                                            {re.thinking}
+                                        </p>
+                                    ))}
                                 </div>
-                            ))}
+                            )}
                         </div>
-                    )}
+                    </div>
                 </div>
-            </div>
+            )}
         </div>
     );
 }
 
-// Sources section
+// Sources section with accordion
 function SourcesSection({ sources }: { sources: Source[] }) {
     const [isExpanded, setIsExpanded] = useState(false);
     const tProgress = useTranslations("sidebar.progress");
@@ -562,35 +673,37 @@ function SourcesSection({ sources }: { sources: Source[] }) {
                 <span className="flex-1 text-xs font-semibold text-muted-foreground/90 uppercase tracking-wider">
                     {tProgress("sourcesCount", { count: sources.length })}
                 </span>
-                <ChevronRight className={cn(
-                    "w-4 h-4 text-muted-foreground/60",
-                    isExpanded && "rotate-90"
+                <ChevronDown className={cn(
+                    "w-3.5 h-3.5 text-muted-foreground/50 transition-transform duration-200",
+                    !isExpanded && "-rotate-90"
                 )} />
             </button>
 
-            {isExpanded && (
-                <div className="mt-3 space-y-0.5">
-                    {sources.slice(0, 5).map((source) => (
-                        <a
-                            key={source.id}
-                            href={source.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-2.5 py-2 px-2.5 -mx-2.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors group"
-                        >
-                            <ExternalLink className="w-3.5 h-3.5 flex-shrink-0 opacity-60 group-hover:opacity-100 transition-opacity" />
-                            <span className="truncate leading-relaxed">{source.title}</span>
-                        </a>
-                    ))}
-                    {sources.length > 5 && (
-                        <div className="pt-2 pl-6">
-                            <span className="text-[11px] text-muted-foreground/60 font-medium">
-                                +{sources.length - 5} more sources
-                            </span>
-                        </div>
-                    )}
+            <div className={cn("accordion-grid", isExpanded && "accordion-open")}>
+                <div className="accordion-inner">
+                    <div className="mt-3 space-y-0.5">
+                        {sources.slice(0, 5).map((source) => (
+                            <a
+                                key={source.id}
+                                href={source.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-2.5 py-2 px-2.5 -mx-2.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors group"
+                            >
+                                <ExternalLink className="w-3.5 h-3.5 flex-shrink-0 opacity-60 group-hover:opacity-100 transition-opacity" />
+                                <span className="truncate leading-relaxed">{source.title}</span>
+                            </a>
+                        ))}
+                        {sources.length > 5 && (
+                            <div className="pt-2 pl-6">
+                                <span className="text-[11px] text-muted-foreground/60 font-medium">
+                                    +{sources.length - 5} more sources
+                                </span>
+                            </div>
+                        )}
+                    </div>
                 </div>
-            )}
+            </div>
         </div>
     );
 }
@@ -604,9 +717,8 @@ interface TaskProgressPanelProps {
 }
 
 /**
- * Task progress panel - displays inline within message bubbles
+ * Task progress panel — Manus-inspired collapsible stages with pill badges
  * Handles both live streaming events and historical (saved) events
- * Clean, minimal design with clear visual hierarchy
  */
 export function TaskProgressPanel({
     events,
@@ -615,9 +727,7 @@ export function TaskProgressPanel({
     agentType,
     className,
 }: TaskProgressPanelProps) {
-    // Historical mode: not streaming (completed or saved events)
     const isHistorical = !isStreaming;
-    // Default to collapsed for historical events, expanded for live streaming
     const [isExpanded, setIsExpanded] = useState(!isHistorical);
     const tProgress = useTranslations("sidebar.progress");
     const t = useTranslations("chat.agent");
@@ -635,42 +745,21 @@ export function TaskProgressPanel({
         let hasError = false;
 
         for (const group of stageGroups) {
-            if (group.stage.status === "failed") {
-                hasError = true;
-            }
-
+            if (group.stage.status === "failed") hasError = true;
             totalTools += group.tools.length;
 
-            // In historical mode, everything is completed
             if (isHistorical) {
-                if (group.stage.status !== "failed") {
-                    completed++;
-                }
+                if (group.stage.status !== "failed") completed++;
                 continue;
             }
 
-            // Live mode: check actual completion status
-            const hasTools = group.tools.length > 0;
-            const allToolsCompleted = hasTools && group.tools.every(t => {
-                const endTs = getEventEndTimestamp(t);
-                return endTs !== undefined || t.status === "completed";
-            });
-            const stageEndTs = getEventEndTimestamp(group.stage);
-            const isCompleted = !isStreaming ||
-                group.stage.status === "completed" ||
-                stageEndTs !== undefined ||
-                allToolsCompleted;
-
-            if (isCompleted && group.stage.status !== "failed") {
-                completed++;
-            }
+            const status = computeStageStatus(group, isHistorical, isStreaming);
+            if (status === "completed") completed++;
         }
 
         return { completed, total: stageGroups.length, totalTools, hasError };
     }, [stageGroups, isStreaming, isHistorical]);
 
-    // Build summary text for historical mode (like TaskProgressPanel did)
-    // Must be before the early return to satisfy React hooks rules
     const summaryText = useMemo(() => {
         if (!isHistorical) return null;
         const parts: string[] = [];
@@ -687,30 +776,28 @@ export function TaskProgressPanel({
 
     return (
         <div className={cn(
-            "rounded-lg border border-border/60 bg-card overflow-hidden max-w-full",
-            // Different margins for live vs historical
+            "rounded-xl border border-border/50 bg-card overflow-hidden max-w-full",
             isHistorical ? "mt-4" : "mt-4 mb-6",
             className
         )}>
             {/* Header */}
             <button
-                className="flex items-center gap-3.5 !w-full px-5 py-3.5 text-left hover:bg-secondary/50 transition-colors"
+                className="flex items-center gap-3.5 w-full px-5 py-3.5 text-left hover:bg-secondary/50 transition-colors"
                 onClick={() => setIsExpanded(!isExpanded)}
             >
                 {/* Status icon */}
                 {isStreaming ? (
                     <PulsingDot />
                 ) : progressSummary.hasError ? (
-                    <div className="w-5 h-5 rounded-full bg-destructive/20 flex items-center justify-center ring-1 ring-destructive/30">
+                    <div className="w-5 h-5 rounded-full bg-destructive/15 flex items-center justify-center">
                         <AlertCircle className="w-3 h-3 text-destructive" strokeWidth={2.5} />
                     </div>
                 ) : isHistorical ? (
-                    // Muted icon for historical
                     <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center">
                         <Check className="w-3 h-3 text-muted-foreground" strokeWidth={2.5} />
                     </div>
                 ) : (
-                    <div className="w-5 h-5 rounded-full bg-success/20 flex items-center justify-center ring-1 ring-success/30">
+                    <div className="w-5 h-5 rounded-full bg-success/15 flex items-center justify-center">
                         <Check className="w-3 h-3 text-success" strokeWidth={2.5} />
                     </div>
                 )}
@@ -726,73 +813,59 @@ export function TaskProgressPanel({
                     }
                 </span>
 
-                {/* Progress count - only show in live mode */}
+                {/* Progress badge */}
                 {!isHistorical && (
-                    <div className="flex items-center gap-2">
-                        <span className="text-xs tabular-nums font-semibold text-muted-foreground/80 px-2 py-1 rounded-md bg-muted/60">
-                            {progressSummary.completed}/{progressSummary.total}
-                        </span>
-                    </div>
+                    <span className="text-xs tabular-nums font-semibold text-muted-foreground/80 px-2 py-1 rounded-md bg-muted/60">
+                        {progressSummary.completed}/{progressSummary.total}
+                    </span>
                 )}
 
                 {/* Expand chevron */}
-                <ChevronRight className={cn(
-                    "w-4 h-4 text-muted-foreground/60",
-                    isExpanded && "rotate-90"
+                <ChevronDown className={cn(
+                    "w-4 h-4 text-muted-foreground/50 transition-transform duration-200",
+                    !isExpanded && "-rotate-90"
                 )} />
             </button>
 
-            {/* Content */}
-            {isExpanded && (
-                <div className="px-5 pb-5 pt-2 bg-background/30">
-                    <div className="space-y-0">
-                        {stageGroups.map((group, index) => {
-                            const hasTools = group.tools.length > 0;
-                            const allToolsCompleted = hasTools && group.tools.every(t => {
-                                const endTs = getEventEndTimestamp(t);
-                                return endTs !== undefined || t.status === "completed";
-                            });
+            {/* Content — accordion animated */}
+            <div className={cn("accordion-grid", isExpanded && "accordion-open")}>
+                <div className="accordion-inner">
+                    <div className="px-5 pb-5 pt-1">
+                        <div className="space-y-0">
+                            {stageGroups.map((group, index) => {
+                                const status = computeStageStatus(group, isHistorical, isStreaming);
+                                const label = getStageDescription(group.stage, tStages, agentType, t, tTools);
+                                const isLast = index === stageGroups.length - 1;
 
-                            let status: "pending" | "running" | "completed" | "failed" = "pending";
+                                return (
+                                    <StageSection
+                                        key={`stage-${index}`}
+                                        label={label}
+                                        status={status}
+                                        duration={{ start: group.startTime, end: group.endTime }}
+                                        tools={group.tools}
+                                        reasoningEvents={group.reasoningEvents}
+                                        tTools={tTools}
+                                        isHistorical={isHistorical}
+                                        defaultExpanded={isLast || status === "running"}
+                                    />
+                                );
+                            })}
+                        </div>
 
-                            if (group.stage.status === "failed") {
-                                status = "failed";
-                            } else if (isHistorical) {
-                                // In historical mode, everything is completed
-                                status = "completed";
-                            } else {
-                                const stageEndTs = getEventEndTimestamp(group.stage);
-                                if (group.stage.status === "completed" ||
-                                    stageEndTs !== undefined ||
-                                    allToolsCompleted ||
-                                    !isStreaming) {
-                                    status = "completed";
-                                } else if (group.stage.status === "running") {
-                                    status = "running";
-                                }
-                            }
+                        <SourcesSection sources={sources} />
 
-                            const label = getStageDescription(group.stage, tStages, agentType, t, tTools);
-
-                            return (
-                                <StageItem
-                                    key={`stage-${index}`}
-                                    label={label}
-                                    status={status}
-                                    duration={{ start: group.startTime, end: group.endTime }}
-                                    tools={group.tools}
-                                    reasoningEvents={group.reasoningEvents}
-                                    tTools={tTools}
-                                    isLast={index === stageGroups.length - 1}
-                                    isHistorical={isHistorical}
-                                />
-                            );
-                        })}
+                        {/* Bottom footer — live mode only */}
+                        {!isHistorical && (
+                            <div className="mt-4 pt-3 border-t border-border/40 flex justify-end">
+                                <span className="text-xs tabular-nums font-medium text-muted-foreground/60">
+                                    {progressSummary.completed}/{progressSummary.total}
+                                </span>
+                            </div>
+                        )}
                     </div>
-
-                    <SourcesSection sources={sources} />
                 </div>
-            )}
+            </div>
         </div>
     );
 }

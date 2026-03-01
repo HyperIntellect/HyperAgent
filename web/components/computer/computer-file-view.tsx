@@ -18,6 +18,7 @@ import {
     FileCog,
     FileArchive,
     FolderClosed,
+    Home,
     X,
     Pencil,
     Save,
@@ -28,17 +29,18 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useComputerStore, type FileEntry } from "@/lib/stores/computer-store";
+import { Badge } from "@/components/ui/badge";
 import { ComputerFileContent } from "./computer-file-content";
+import { ComputerEmptyState } from "./computer-empty-state";
 
 interface ComputerFileViewProps {
     className?: string;
 }
 
-/* Semantic file-type colors - intentionally not using theme tokens for file-type differentiation */
 function getFileIcon(filename: string, isDirectory: boolean, isSelected: boolean) {
     if (isDirectory) {
         const Icon = isSelected ? FolderOpen : Folder;
-        return <Icon className="w-4 h-4 flex-shrink-0 text-amber-500" />;
+        return <Icon className="w-4 h-4 flex-shrink-0 text-primary" />;
     }
 
     const ext = filename.split(".").pop()?.toLowerCase() || "";
@@ -46,46 +48,46 @@ function getFileIcon(filename: string, isDirectory: boolean, isSelected: boolean
 
     // Code files
     if (["ts", "tsx", "js", "jsx", "mjs", "cjs"].includes(ext)) {
-        return <FileCode className="w-4 h-4 flex-shrink-0 text-blue-500" />;
+        return <FileCode className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
     if (["py", "pyw", "pyi"].includes(ext)) {
-        return <FileCode className="w-4 h-4 flex-shrink-0 text-yellow-500" />;
+        return <FileCode className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
     if (["go", "rs", "c", "cpp", "h", "hpp", "java", "kt", "scala", "swift", "rb", "php", "lua", "r"].includes(ext)) {
-        return <FileCode className="w-4 h-4 flex-shrink-0 text-orange-500" />;
+        return <FileCode className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
     if (["sh", "bash", "zsh", "fish"].includes(ext)) {
-        return <FileCode className="w-4 h-4 flex-shrink-0 text-green-600" />;
+        return <FileCode className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
 
     // Web files
     if (["html", "htm", "vue", "svelte"].includes(ext)) {
-        return <FileCode className="w-4 h-4 flex-shrink-0 text-orange-400" />;
+        return <FileCode className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
     if (["css", "scss", "less", "sass"].includes(ext)) {
-        return <FileCode className="w-4 h-4 flex-shrink-0 text-purple-500" />;
+        return <FileCode className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
 
     // Data / config files
     if (["json", "jsonl", "json5"].includes(ext)) {
-        return <FileJson className="w-4 h-4 flex-shrink-0 text-yellow-600" />;
+        return <FileJson className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
     if (["yml", "yaml", "toml", "ini", "env", "cfg"].includes(ext)) {
         return <FileCog className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
     if (["xml", "svg"].includes(ext)) {
-        return <FileCode className="w-4 h-4 flex-shrink-0 text-orange-500" />;
+        return <FileCode className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
     if (["csv", "tsv", "xls", "xlsx"].includes(ext)) {
-        return <FileSpreadsheet className="w-4 h-4 flex-shrink-0 text-green-600" />;
+        return <FileSpreadsheet className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
     if (["sql", "db", "sqlite"].includes(ext)) {
-        return <FileSpreadsheet className="w-4 h-4 flex-shrink-0 text-blue-400" />;
+        return <FileSpreadsheet className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
 
     // Image files
     if (["png", "jpg", "jpeg", "gif", "webp", "ico", "bmp", "tiff"].includes(ext)) {
-        return <FileImage className="w-4 h-4 flex-shrink-0 text-pink-500" />;
+        return <FileImage className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
 
     // Document files
@@ -93,12 +95,12 @@ function getFileIcon(filename: string, isDirectory: boolean, isSelected: boolean
         return <FileText className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
     if (["pdf", "doc", "docx"].includes(ext)) {
-        return <FileType className="w-4 h-4 flex-shrink-0 text-red-500" />;
+        return <FileType className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
 
     // Archives
     if (["zip", "tar", "gz", "bz2", "xz", "7z", "rar"].includes(ext)) {
-        return <FileArchive className="w-4 h-4 flex-shrink-0 text-amber-600" />;
+        return <FileArchive className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
 
     // Config-like files without extension
@@ -111,7 +113,7 @@ function getFileIcon(filename: string, isDirectory: boolean, isSelected: boolean
 
     // Lock files
     if (ext === "lock" || lowerName.endsWith("-lock.json") || lowerName.endsWith(".lockb")) {
-        return <FileCog className="w-4 h-4 flex-shrink-0 text-muted-foreground/60" />;
+        return <FileCog className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
     }
 
     return <FileText className="w-4 h-4 flex-shrink-0 text-muted-foreground" />;
@@ -155,9 +157,9 @@ function Breadcrumb({
         <div className="flex items-center gap-1 px-3 py-2 text-xs border-b border-border/30 bg-secondary/30 overflow-x-auto">
             <button
                 onClick={() => onNavigate("/")}
-                className="text-muted-foreground hover:text-foreground transition-colors"
+                className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 px-1 py-0.5 rounded transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
             >
-                /
+                <Home className="w-3.5 h-3.5" />
             </button>
             {parts.map((part, index) => {
                 const fullPath = "/" + parts.slice(0, index + 1).join("/");
@@ -168,10 +170,10 @@ function Breadcrumb({
                         <button
                             onClick={() => !isLast && onNavigate(fullPath)}
                             className={cn(
-                                "transition-colors truncate max-w-[160px]",
+                                "transition-colors truncate max-w-[160px] px-1 py-0.5 rounded focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
                                 isLast
                                     ? "text-foreground font-medium"
-                                    : "text-muted-foreground hover:text-foreground cursor-pointer"
+                                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"
                             )}
                             disabled={isLast}
                         >
@@ -187,11 +189,13 @@ function Breadcrumb({
 function FileItem({
     entry,
     isSelected,
+    isChanged,
     onClick,
     onDoubleClick,
 }: {
     entry: FileEntry;
     isSelected: boolean;
+    isChanged: boolean;
     onClick: () => void;
     onDoubleClick: () => void;
 }) {
@@ -216,9 +220,11 @@ function FileItem({
             className={cn(
                 "w-full flex items-center gap-2.5 px-3 py-2 text-left group",
                 "hover:bg-secondary/80 transition-colors cursor-pointer",
+                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
                 isSelected
                     ? "bg-primary/8 border-l-2 border-l-primary"
-                    : "border-l-2 border-l-transparent"
+                    : "border-l-2 border-l-transparent",
+                isChanged && "bg-primary/5"
             )}
             role="treeitem"
             aria-selected={isSelected}
@@ -231,18 +237,19 @@ function FileItem({
             )}>
                 {entry.name}
             </span>
-            {recentlyModified && (
-                <span className="text-[11px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary/10 text-primary">
-                    {t("workspace.modified")}
-                </span>
+            {isChanged && (
+                <Badge variant="subtle">{t("workspace.updated")}</Badge>
             )}
-            {!isDir && modifiedLabel && !recentlyModified && (
-                <span className="text-[11px] text-muted-foreground/70">
+            {!isChanged && recentlyModified && (
+                <Badge variant="subtle">{t("workspace.modified")}</Badge>
+            )}
+            {!isDir && modifiedLabel && !recentlyModified && !isChanged && (
+                <span className="text-xs text-muted-foreground/70">
                     {modifiedLabel}
                 </span>
             )}
             {!isDir && entry.size !== undefined && (
-                <span className="text-[11px] text-muted-foreground/80 tabular-nums">{formatSize(entry.size)}</span>
+                <span className="text-xs text-muted-foreground/80 tabular-nums">{formatSize(entry.size)}</span>
             )}
             {isDir && (
                 <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
@@ -263,7 +270,7 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
         return state.conversationStates[id] ?? null;
     });
 
-    const currentPath = convState?.currentPath ?? "/home/ubuntu";
+    const currentPath = convState?.currentPath ?? "/home/user";
     const files = convState?.files ?? [];
     const selectedFile = convState?.selectedFile ?? null;
     const workspaceSandboxType = convState?.workspaceSandboxType ?? null;
@@ -272,6 +279,11 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
     const fileContentLoading = convState?.fileContentLoading ?? false;
     const fileContentError = convState?.fileContentError ?? null;
     const fileContentIsBinary = convState?.fileContentIsBinary ?? false;
+    const changedFiles = convState?.changedFiles ?? [];
+
+    // Set of recently changed file paths for quick lookup
+    const changedFilesSet = useMemo(() => new Set(changedFiles), [changedFiles]);
+    const isSelectedFileChanged = selectedFile ? changedFilesSet.has(selectedFile) : false;
 
     // Actions
     const setSelectedFile = useComputerStore((state) => state.setSelectedFile);
@@ -378,6 +390,17 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
         (f) => f.path === selectedFile && f.type === "directory"
     );
 
+    // Recent files from store (persisted per conversation)
+    const recentFiles = useComputerStore((s) => s.getRecentFiles());
+    const addRecentFile = useComputerStore((s) => s.addRecentFile);
+
+    // Track recently opened files in the store
+    useEffect(() => {
+        if (selectedFile && !files.find((f) => f.path === selectedFile && f.type === "directory")) {
+            addRecentFile(selectedFile);
+        }
+    }, [selectedFile, files, addRecentFile]);
+
     // Editing state
     const [isEditing, setIsEditing] = useState(false);
     const [editContent, setEditContent] = useState("");
@@ -437,12 +460,12 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
     return (
         <div className={cn("flex-1 flex flex-col overflow-hidden bg-background", className)}>
             {/* Header with refresh and search buttons */}
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border/30 bg-secondary/20">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-secondary/20">
                 {isViewingContent ? (
                     // Back button when viewing file content
                     <button
                         onClick={handleBackToList}
-                        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded"
                     >
                         <ChevronLeft className="w-3.5 h-3.5" />
                         {t("workspace.title")}
@@ -457,7 +480,7 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
                         <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6"
+                            className="h-8 w-8"
                             onClick={toggleSearch}
                             disabled={!isConnected}
                             aria-label={t("workspace.search")}
@@ -469,7 +492,7 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
                     <Button
                         variant="ghost"
                         size="icon"
-                        className="h-6 w-6"
+                        className="h-8 w-8"
                         onClick={handleRefresh}
                         disabled={!isConnected || isRefreshing}
                         aria-label={t("workspace.refresh")}
@@ -485,34 +508,28 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
 
             {!isConnected ? (
                 // No workspace connected
-                <div className="flex-1 flex flex-col items-center justify-center py-12 px-6">
-                    <div className="w-16 h-16 rounded-2xl bg-secondary/50 flex items-center justify-center mb-4">
-                        <FolderClosed className="w-8 h-8 text-muted-foreground/40" />
-                    </div>
-                    <p className="text-sm font-medium text-muted-foreground mb-1">
-                        {t("workspace.empty")}
-                    </p>
-                </div>
+                <ComputerEmptyState
+                    icon={FolderClosed}
+                    title={t("workspace.empty")}
+                />
             ) : isViewingContent ? (
                 // Drill-down: full-width file content view with edit support
                 isEditing ? (
                     <div className="flex-1 flex flex-col overflow-hidden">
                         {/* Editing header */}
-                        <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/30 bg-primary/5">
+                        <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/50 bg-primary/5">
                             <div className="flex items-center gap-2 min-w-0">
                                 <Pencil className="w-3.5 h-3.5 text-primary" />
                                 <span className="text-xs font-mono text-foreground truncate max-w-[200px]">
                                     {selectedFileName}
                                 </span>
-                                <span className="text-[10px] uppercase tracking-wider font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-                                    {t("editing")}
-                                </span>
+                                <Badge variant="subtle">{t("editing")}</Badge>
                             </div>
                             <div className="flex items-center gap-1">
                                 <Button
                                     variant="ghost"
                                     size="sm"
-                                    className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
+                                    className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
                                     onClick={handleCancelEditing}
                                     disabled={isSaving}
                                 >
@@ -522,7 +539,7 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
                                 <Button
                                     variant="default"
                                     size="sm"
-                                    className="h-6 px-2 text-xs"
+                                    className="h-8 px-2 text-xs"
                                     onClick={handleSaveFile}
                                     disabled={isSaving}
                                 >
@@ -546,17 +563,61 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
                     </div>
                 ) : (
                     <div className="flex-1 flex flex-col overflow-hidden">
+                        {/* Recent files tabs */}
+                        {recentFiles.length > 1 && (
+                            <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border/30 bg-secondary/10 overflow-x-auto">
+                                {recentFiles.map((filePath) => {
+                                    const name = filePath.split("/").pop() || "";
+                                    const isActive = filePath === selectedFile;
+                                    return (
+                                        <button
+                                            key={filePath}
+                                            onClick={() => {
+                                                setSelectedFile(filePath);
+                                                loadFileContent(filePath);
+                                            }}
+                                            className={cn(
+                                                "px-2 py-1 text-xs rounded truncate max-w-[120px] transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                                                isActive
+                                                    ? "bg-secondary text-foreground font-medium"
+                                                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
+                                            )}
+                                            title={filePath}
+                                        >
+                                            {name}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
                         {/* Edit button overlay for text files */}
                         {fileContent !== null && !fileContentIsBinary && !fileContentLoading && (
-                            <div className="flex items-center justify-end px-3 py-1 border-b border-border/20 bg-secondary/10 shrink-0">
+                            <div className="flex items-center justify-end px-3 py-1 border-b border-border/30 bg-secondary/10 shrink-0">
                                 <Button
                                     variant="ghost"
                                     size="sm"
-                                    className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
+                                    className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
                                     onClick={handleStartEditing}
                                 >
                                     <Pencil className="w-3.5 h-3.5 mr-1" />
                                     {t("editFile")}
+                                </Button>
+                            </div>
+                        )}
+                        {/* File updated banner */}
+                        {isSelectedFileChanged && !fileContentLoading && (
+                            <div className="flex items-center justify-between px-3 py-1.5 border-b border-primary/20 bg-primary/5 shrink-0">
+                                <span className="text-xs text-primary">
+                                    {t("workspace.fileUpdated")}
+                                </span>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-8 px-2 text-xs text-primary hover:text-primary/80"
+                                    onClick={() => selectedFile && loadFileContent(selectedFile)}
+                                >
+                                    <RefreshCw className="w-3 h-3 mr-1" />
+                                    {t("workspace.reload")}
                                 </Button>
                             </div>
                         )}
@@ -608,12 +669,12 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
                             {currentPath !== "/" && !searchQuery && (
                                 <button
                                     onClick={handleParentClick}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-secondary/80 transition-colors border-l-2 border-l-transparent cursor-pointer"
+                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-secondary/80 transition-colors border-l-2 border-l-transparent cursor-pointer focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                                     role="treeitem"
                                     aria-selected={false}
                                     aria-label={t("workspace.parentDirectory")}
                                 >
-                                    <Folder className="w-4 h-4 text-amber-500" />
+                                    <Folder className="w-4 h-4 text-primary" />
                                     <span className="text-sm text-muted-foreground">..</span>
                                 </button>
                             )}
@@ -643,6 +704,7 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
                                         key={entry.path}
                                         entry={entry}
                                         isSelected={selectedFile === entry.path}
+                                        isChanged={changedFilesSet.has(entry.path)}
                                         onClick={() => handleFileSelect(entry)}
                                         onDoubleClick={() => handleDoubleClick(entry)}
                                     />
@@ -653,8 +715,8 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
 
                     {/* File count footer */}
                     {files.length > 0 && (
-                        <div className="px-3 py-1.5 border-t border-border/30 bg-secondary/10">
-                            <span className="text-[11px] text-muted-foreground/70 tabular-nums">
+                        <div className="px-3 py-1.5 border-t border-border/50 bg-secondary/10">
+                            <span className="text-xs text-muted-foreground/70 tabular-nums">
                                 {files.filter((f) => f.type === "file").length} {t("workspace.fileCount")}
                                 {files.filter((f) => f.type === "directory").length > 0 &&
                                     ` / ${files.filter((f) => f.type === "directory").length} ${t("workspace.folderCount")}`}

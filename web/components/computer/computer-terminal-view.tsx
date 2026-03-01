@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useRef, useEffect, useState, useCallback } from "react";
+import { useCopyToClipboard } from "@/lib/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -30,22 +31,18 @@ interface ComputerTerminalViewProps {
     className?: string;
 }
 
+const PLACEHOLDER_COMMANDS = ["ls", "pwd", "cat README.md", "npm run dev"];
+
 function CopyButton({ text }: { text: string }) {
-    const [copied, setCopied] = useState(false);
+    const { copied, copy } = useCopyToClipboard(1500);
     const t = useTranslations("computer");
 
     const handleCopy = useCallback(
-        async (e: React.MouseEvent) => {
+        (e: React.MouseEvent) => {
             e.stopPropagation();
-            try {
-                await navigator.clipboard.writeText(text);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-            } catch {
-                // Clipboard API may not be available
-            }
+            copy(text);
         },
-        [text]
+        [text, copy]
     );
 
     return (
@@ -55,10 +52,11 @@ function CopyButton({ text }: { text: string }) {
                     <button
                         onClick={handleCopy}
                         className={cn(
-                            "p-1 rounded transition-colors",
+                            "h-8 w-8 flex items-center justify-center rounded transition-colors",
                             "opacity-0 group-hover:opacity-100",
                             "text-terminal-output/50 hover:text-terminal-fg",
-                            "hover:bg-accent"
+                            "hover:bg-accent",
+                            "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                         )}
                         aria-label={t("copyCommand")}
                     >
@@ -151,7 +149,7 @@ export function ComputerTerminalView({
     lines,
     isLive = true,
     currentCommand,
-    currentCwd = "/home/ubuntu",
+    currentCwd = "/home/user",
     onClear,
     onSendCommand,
     className,
@@ -163,6 +161,9 @@ export function ComputerTerminalView({
     const [inputValue, setInputValue] = useState("");
     const [commandHistory, setCommandHistory] = useState<string[]>([]);
     const [historyIndex, setHistoryIndex] = useState(-1);
+    const [isInputFocused, setIsInputFocused] = useState(false);
+    const [showControlBanner, setShowControlBanner] = useState(false);
+    const [placeholderIndex, setPlaceholderIndex] = useState(0);
     const t = useTranslations("computer");
 
     // Auto-scroll to bottom when new lines are added (only when live)
@@ -172,8 +173,34 @@ export function ComputerTerminalView({
         }
     }, [lines.length, isLive]);
 
+    // Cycle placeholder commands every 3 seconds
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setPlaceholderIndex((prev) => (prev + 1) % PLACEHOLDER_COMMANDS.length);
+        }, 3000);
+        return () => clearInterval(interval);
+    }, []);
+
+    // Handle clicking the terminal content area to focus input
+    const handleContentClick = useCallback(() => {
+        if (inputRef.current) {
+            inputRef.current.focus();
+            setShowControlBanner(true);
+        }
+    }, []);
+
     // Handle keyboard input for the terminal input
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+        // Ctrl+C interrupt
+        if (e.key === "c" && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            if (onSendCommand) {
+                onSendCommand("\x03"); // Send interrupt signal
+            }
+            setInputValue("");
+            return;
+        }
+
         if (e.key === "Enter" && inputValue.trim() && onSendCommand) {
             e.preventDefault();
             onSendCommand(inputValue.trim());
@@ -208,7 +235,7 @@ export function ComputerTerminalView({
             ? lines
             : lines;
 
-    // Shorten cwd for display (replace /home/ubuntu with ~)
+    // Shorten cwd for display (replace /home/user with ~)
     const displayCwd = currentCwd.replace(/^\/home\/ubuntu/, "~") || "~";
 
     return (
@@ -217,7 +244,7 @@ export function ComputerTerminalView({
             <div
                 className={cn(
                     "flex items-center justify-between px-3 h-8 shrink-0",
-                    "border-b border-border"
+                    "bg-[hsl(var(--terminal-bg))] border-b border-terminal-border"
                 )}
             >
                 <div className="flex items-center gap-2 min-w-0">
@@ -233,9 +260,10 @@ export function ComputerTerminalView({
                                 <button
                                     onClick={() => setWordWrap((v) => !v)}
                                     className={cn(
-                                        "p-1 rounded transition-colors",
+                                        "h-8 w-8 flex items-center justify-center rounded transition-colors",
                                         "text-terminal-output/50 hover:text-terminal-fg hover:bg-accent",
-                                        wordWrap && "text-terminal-fg bg-accent"
+                                        wordWrap && "text-terminal-fg bg-accent",
+                                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                                     )}
                                     aria-label={t("wordWrap")}
                                 >
@@ -255,8 +283,9 @@ export function ComputerTerminalView({
                                     <button
                                         onClick={onClear}
                                         className={cn(
-                                            "p-1 rounded transition-colors",
-                                            "text-terminal-output/50 hover:text-terminal-fg hover:bg-accent"
+                                            "h-8 w-8 flex items-center justify-center rounded transition-colors",
+                                            "text-terminal-output/50 hover:text-terminal-fg hover:bg-accent",
+                                            "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                                         )}
                                         aria-label={t("clearTerminal")}
                                     >
@@ -276,14 +305,21 @@ export function ComputerTerminalView({
             <ScrollArea className="flex-1">
                 <div
                     ref={scrollRef}
-                    className="p-3 font-mono text-sm leading-relaxed min-h-full"
+                    className="p-3 font-mono text-sm leading-relaxed min-h-full cursor-text"
                     role="log"
                     aria-live="polite"
                     aria-label={t("terminalOutput")}
+                    onClick={handleContentClick}
                 >
                     {visibleLines.length === 0 && !currentCommand ? (
-                        <div className="flex flex-col items-center justify-center h-full min-h-[120px] gap-2">
-                            <TerminalSquare className="w-8 h-8 text-terminal-output/20" />
+                        <div className="flex flex-col items-center justify-center h-full min-h-[120px] gap-3">
+                            <div className="font-mono text-sm">
+                                <span className="text-terminal-prompt font-semibold">ubuntu@sandbox</span>
+                                <span className="text-terminal-fg">:</span>
+                                <span className="text-terminal-command">~</span>
+                                <span className="text-terminal-fg">$ </span>
+                                <span className="inline-block w-2 h-4 bg-terminal-fg/70 animate-terminal-cursor align-middle" />
+                            </div>
                             <span className="text-terminal-output/40 text-xs">
                                 {t("noTerminalOutput")}
                             </span>
@@ -292,7 +328,7 @@ export function ComputerTerminalView({
                         visibleLines.map((line) => (
                             <div
                                 key={line.id}
-                                className="py-0.5 hover:bg-accent/50 transition-colors rounded px-1 -mx-1"
+                                className="py-0.5 hover:bg-[hsl(var(--terminal-output)/0.05)] transition-colors rounded px-1 -mx-1"
                             >
                                 <TerminalLineContent
                                     line={line}
@@ -304,7 +340,7 @@ export function ComputerTerminalView({
 
                     {/* Running command indicator */}
                     {isLive && currentCommand && (
-                        <div className="py-0.5 px-1 -mx-1 group flex items-start justify-between gap-2">
+                        <div className="py-0.5 px-1 -mx-1 border-l-2 border-l-[hsl(var(--terminal-prompt))] group flex items-start justify-between gap-2">
                             <div className="flex items-start min-w-0">
                                 <TerminalPrompt cwd={currentCwd} />
                                 <span className="text-terminal-command">
@@ -319,7 +355,7 @@ export function ComputerTerminalView({
                     {isLive && !currentCommand && visibleLines.length > 0 && (
                         <div className="py-0.5 px-1 -mx-1 flex items-center">
                             <TerminalPrompt cwd={currentCwd} />
-                            <span className="w-2 h-4 bg-terminal-fg/70 animate-pulse ml-0.5" />
+                            <span className="w-2 h-4 bg-terminal-fg/70 animate-terminal-cursor ml-0.5" />
                         </div>
                     )}
 
@@ -330,19 +366,44 @@ export function ComputerTerminalView({
 
             {/* Terminal input */}
             {isLive && onSendCommand && (
-                <div className="flex items-center border-t border-border/50 bg-terminal-bg px-3 py-1.5 shrink-0">
-                    <span className="text-terminal-prompt text-xs mr-2 flex-shrink-0 font-mono">
-                        ubuntu@sandbox:{displayCwd}$
-                    </span>
-                    <input
-                        ref={inputRef}
-                        value={inputValue}
-                        onChange={(e) => setInputValue(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        className="flex-1 bg-transparent text-terminal-fg text-xs outline-none caret-terminal-fg font-mono placeholder:text-terminal-output/30"
-                        placeholder={t("typeCommand")}
-                        autoFocus
-                    />
+                <div className="shrink-0">
+                    {/* "You are in control" banner */}
+                    {showControlBanner && isInputFocused && (
+                        <div className="bg-primary/10 text-primary text-xs py-1 px-3 rounded">
+                            You are in control
+                        </div>
+                    )}
+                    <div
+                        className={cn(
+                            "flex items-center border-t border-border/50 px-3 py-1.5",
+                            "bg-[hsl(var(--terminal-input-bg))]",
+                            isInputFocused && "border-l-2 border-l-primary"
+                        )}
+                    >
+                        <span className="text-terminal-prompt text-xs mr-2 flex-shrink-0 font-mono">
+                            ubuntu@sandbox:{displayCwd}$
+                        </span>
+                        <input
+                            ref={inputRef}
+                            value={inputValue}
+                            onChange={(e) => setInputValue(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            onFocus={() => {
+                                setIsInputFocused(true);
+                                setShowControlBanner(true);
+                            }}
+                            onBlur={() => {
+                                setIsInputFocused(false);
+                                setShowControlBanner(false);
+                            }}
+                            className={cn(
+                                "flex-1 bg-transparent text-terminal-fg text-xs outline-none caret-terminal-fg font-mono placeholder:text-terminal-output/30",
+                                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+                            )}
+                            placeholder={PLACEHOLDER_COMMANDS[placeholderIndex]}
+                            autoFocus
+                        />
+                    </div>
                 </div>
             )}
         </div>

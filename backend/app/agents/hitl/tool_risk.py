@@ -1,88 +1,34 @@
-"""Tool risk registry for Human-in-the-Loop approvals.
+"""Policy-backed tool risk helpers for HITL approvals."""
 
-Defines which tools require user approval before execution based on
-their potential impact:
-
-- HIGH_RISK: Always requires approval (browser automation, code execution, file ops)
-- MEDIUM_RISK: May require approval based on settings
-- LOW_RISK: No approval needed (search, read-only operations)
-"""
+from __future__ import annotations
 
 from enum import Enum
 from typing import Literal
 
+from app.agents.policy import PolicyDecision, PolicyInput, get_policy_engine
+
 
 class ToolRiskLevel(str, Enum):
-    """Risk levels for tool categorization."""
-
-    HIGH = "high"  # Always requires approval
-    MEDIUM = "medium"  # May require approval based on settings
-    LOW = "low"  # No approval needed
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
 
 
-# Tools that always require user approval before execution
-HIGH_RISK_TOOLS: set[str] = {
-    # Browser automation - can access arbitrary URLs and perform actions
-    "browser_navigate",
-    "browser_click",
-    "browser_type",
-    "browser_scroll",
-    "browser_screenshot",
-    "browser_close",
-    "computer_tool",  # E2B desktop/browser tool
-    # Code execution - can run arbitrary code
-    "execute_code",
-    "code_interpreter",
-    "python_repl",
-    "sandbox_execute",
-    # File operations - can read/write files
-    "sandbox_file",
-    "file_write",
-    "file_delete",
-    # System operations
-    "shell_command",
-    "bash",
-}
-
-# Tools that may require approval depending on settings
-MEDIUM_RISK_TOOLS: set[str] = {
-    # External API calls
-    "api_call",
-    "http_request",
-    # Data modification
-    "database_write",
-    "database_delete",
-    # File reading (could expose sensitive data)
-    "file_read",
-    "sandbox_file_read",
-}
-
-# All tools not in HIGH or MEDIUM risk are considered LOW risk
-# and do not require approval
+# Backward-compatible exports; policy engine is authoritative now.
+HIGH_RISK_TOOLS: set[str] = set()
+MEDIUM_RISK_TOOLS: set[str] = set()
 
 
 def get_tool_risk_level(tool_name: str) -> ToolRiskLevel:
-    """Get the risk level for a tool.
+    """Get policy-derived risk level for a tool."""
+    from app.agents.tools.registry import get_tool_contract
 
-    Args:
-        tool_name: Name of the tool
-
-    Returns:
-        Risk level for the tool
-    """
-    if tool_name in HIGH_RISK_TOOLS:
-        return ToolRiskLevel.HIGH
-    elif tool_name in MEDIUM_RISK_TOOLS:
-        return ToolRiskLevel.MEDIUM
-    else:
-        return ToolRiskLevel.LOW
+    result = get_policy_engine().assess_risk(tool_name, get_tool_contract(tool_name))
+    return ToolRiskLevel(result.value)
 
 
 def get_skill_risk_level(skill_id: str) -> ToolRiskLevel:
-    """Infer risk level for a skill from its required tool surface.
-
-    If the skill cannot be resolved, treat it as HIGH risk to fail closed.
-    """
+    """Infer risk level for a skill from metadata + required tool surface."""
     try:
         from app.services.skill_registry import skill_registry
 
@@ -94,12 +40,8 @@ def get_skill_risk_level(skill_id: str) -> ToolRiskLevel:
         if explicit_risk in ("low", "medium", "high"):
             return ToolRiskLevel(explicit_risk)
 
-        required_tools = skill.metadata.required_tools or []
-        if not required_tools:
-            return ToolRiskLevel.LOW
-
         has_medium = False
-        for tool_name in required_tools:
+        for tool_name in skill.metadata.required_tools or []:
             level = get_tool_risk_level(tool_name)
             if level == ToolRiskLevel.HIGH:
                 return ToolRiskLevel.HIGH
@@ -107,7 +49,6 @@ def get_skill_risk_level(skill_id: str) -> ToolRiskLevel:
                 has_medium = True
         return ToolRiskLevel.MEDIUM if has_medium else ToolRiskLevel.LOW
     except Exception:
-        # Fail closed on lookup/parsing issues.
         return ToolRiskLevel.HIGH
 
 
@@ -121,21 +62,37 @@ def requires_approval_for_skill(
     if not hitl_enabled:
         return False
 
-    # Support both coarse and fine-grained auto-approval.
-    # - "invoke_skill" approves all skills
-    # - "invoke_skill:<skill_id>" approves one specific skill
     approved = set(auto_approve_tools or [])
     if "invoke_skill" in approved or f"invoke_skill:{skill_id}" in approved:
         return False
 
-    risk_level = get_skill_risk_level(skill_id)
+    fake_tool_args = {"skill_id": skill_id}
+    result = get_policy_engine().decide(
+        PolicyInput(
+            tool_name="invoke_skill",
+            tool_args=fake_tool_args,
+            auto_approve_tools=auto_approve_tools,
+            hitl_enabled=hitl_enabled,
+            risk_threshold=risk_threshold,
+            contract=_get_contract("invoke_skill"),
+            is_skill_invocation=True,
+        )
+    )
 
-    if risk_threshold == "high":
-        return risk_level == ToolRiskLevel.HIGH
-    elif risk_threshold == "medium":
-        return risk_level in (ToolRiskLevel.HIGH, ToolRiskLevel.MEDIUM)
-    else:  # "all"
-        return True
+    # Elevate invoke_skill decision using resolved skill risk.
+    if result.decision == PolicyDecision.ALLOW:
+        skill_risk = get_skill_risk_level(skill_id)
+        if risk_threshold == "all":
+            return True
+        if risk_threshold == "medium" and skill_risk in {
+            ToolRiskLevel.MEDIUM,
+            ToolRiskLevel.HIGH,
+        }:
+            return True
+        if risk_threshold == "high" and skill_risk == ToolRiskLevel.HIGH:
+            return True
+        return False
+    return result.decision == PolicyDecision.REQUIRE_APPROVAL
 
 
 def requires_approval(
@@ -144,47 +101,28 @@ def requires_approval(
     hitl_enabled: bool = True,
     risk_threshold: Literal["high", "medium", "all"] = "high",
 ) -> bool:
-    """Check if a tool requires user approval.
+    """Check if a tool requires approval under policy engine."""
+    result = get_policy_engine().decide(
+        PolicyInput(
+            tool_name=tool_name,
+            tool_args={},
+            auto_approve_tools=auto_approve_tools,
+            hitl_enabled=hitl_enabled,
+            risk_threshold=risk_threshold,
+            contract=_get_contract(tool_name),
+        )
+    )
+    return result.decision == PolicyDecision.REQUIRE_APPROVAL
 
-    Args:
-        tool_name: Name of the tool to check
-        auto_approve_tools: List of tools user has auto-approved
-        hitl_enabled: Whether HITL is enabled
-        risk_threshold: Minimum risk level requiring approval
-            - "high": Only HIGH risk tools require approval
-            - "medium": HIGH and MEDIUM risk tools require approval
-            - "all": All tools require approval
 
-    Returns:
-        True if the tool requires approval
-    """
-    if not hitl_enabled:
-        return False
+def _get_contract(tool_name: str):
+    from app.agents.tools.registry import get_tool_contract
 
-    # Check if user has auto-approved this tool for the session
-    if auto_approve_tools and tool_name in auto_approve_tools:
-        return False
-
-    risk_level = get_tool_risk_level(tool_name)
-
-    if risk_threshold == "high":
-        return risk_level == ToolRiskLevel.HIGH
-    elif risk_threshold == "medium":
-        return risk_level in (ToolRiskLevel.HIGH, ToolRiskLevel.MEDIUM)
-    else:  # "all"
-        return True
+    return get_tool_contract(tool_name)
 
 
 def get_tool_approval_message(tool_name: str, args: dict) -> tuple[str, str]:
-    """Generate approval title and message for a tool.
-
-    Args:
-        tool_name: Name of the tool
-        args: Tool arguments
-
-    Returns:
-        Tuple of (title, message) for the approval dialog
-    """
+    """Generate approval title/message for a tool."""
     risk_level = get_tool_risk_level(tool_name)
 
     if tool_name in ("browser_navigate", "computer_tool"):
@@ -193,14 +131,14 @@ def get_tool_approval_message(tool_name: str, args: dict) -> tuple[str, str]:
             "Browser Navigation",
             f"The agent wants to navigate to:\n\n**{url}**\n\nThis will open a browser and access external content.",
         )
-    elif tool_name in ("browser_click", "browser_type"):
+    if tool_name in ("browser_click", "browser_type"):
         target = args.get("selector", args.get("text", "element"))
         action = "click" if tool_name == "browser_click" else "type into"
         return (
             f"Browser {action.title()}",
             f"The agent wants to {action} **{target}** in the browser.\n\nThis may trigger actions on the current page.",
         )
-    elif tool_name in ("execute_code", "code_interpreter", "python_repl", "sandbox_execute"):
+    if tool_name in ("execute_code", "code_interpreter", "python_repl", "sandbox_execute"):
         code_preview = args.get("code", "")[:200]
         if len(args.get("code", "")) > 200:
             code_preview += "..."
@@ -208,16 +146,14 @@ def get_tool_approval_message(tool_name: str, args: dict) -> tuple[str, str]:
             "Code Execution",
             f"The agent wants to execute code:\n\n```\n{code_preview}\n```\n\nThis code will run in a sandboxed environment.",
         )
-    elif tool_name in ("sandbox_file", "file_write", "file_delete"):
+    if tool_name in ("sandbox_file", "file_write", "file_delete", "file_str_replace"):
         path = args.get("path", args.get("filename", "unknown"))
-        operation = "modify" if "write" in tool_name else "delete"
+        operation = "modify" if "delete" not in tool_name else "delete"
         return (
             f"File {operation.title()}",
             f"The agent wants to {operation} the file:\n\n**{path}**",
         )
-    else:
-        # Generic message for other high-risk tools
-        return (
-            f"Tool Approval: {tool_name}",
-            f"The agent wants to use the **{tool_name}** tool.\n\nRisk level: **{risk_level.value}**",
-        )
+    return (
+        f"Tool Approval: {tool_name}",
+        f"The agent wants to use **{tool_name}**.\n\nRisk level: **{risk_level.value}**",
+    )

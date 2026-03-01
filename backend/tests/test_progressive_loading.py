@@ -31,6 +31,7 @@ class _StubSkillA(ToolSkill):
             )
         ],
         output_schema={"type": "object"},
+        risk_level="low",
         tags=["test"],
         enabled=True,
     )
@@ -50,6 +51,7 @@ class _StubSkillB(ToolSkill):
         category="research",
         parameters=[],
         output_schema={"type": "object"},
+        risk_level="low",
         tags=["test"],
         enabled=True,
     )
@@ -69,6 +71,7 @@ class _DisabledStubSkill(ToolSkill):
         category="code",
         parameters=[],
         output_schema={"type": "object"},
+        risk_level="low",
         tags=[],
         enabled=False,
     )
@@ -278,6 +281,7 @@ class TestLoadSkillFull:
                 category="code",
                 parameters=[],
                 output_schema={},
+                risk_level="low",
             )
 
         registry._builtin_skills["broken"] = _BrokenSkill

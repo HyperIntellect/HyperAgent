@@ -18,6 +18,7 @@ import { TypingIndicator } from "./typing-indicator";
 import { StreamingCursor } from "./streaming-cursor";
 import { MessageAttachments } from "./message-attachments";
 import { markdownComponents } from "./markdown-components";
+import { CostIndicator } from "@/components/ui/cost-indicator";
 import type {
     Message,
     FileAttachment,
@@ -455,12 +456,20 @@ export const MessageBubble = memo(function MessageBubble({
                     />
                 )}
 
+                {/* Live token usage during streaming */}
+                {isStreaming && streamingEvents && streamingEvents.length > 0 && (
+                    <div className="mt-3 flex items-center justify-end">
+                        <CostIndicator events={streamingEvents as AgentEvent[]} />
+                    </div>
+                )}
+
                 {/* Action buttons for assistant message - only show when not streaming */}
                 {!isStreaming && (
                     <MessageActions
                         copied={copied}
                         onCopy={handleCopyMessage}
                         onRegenerate={onRegenerate}
+                        events={agentEvents}
                     />
                 )}
             </div>
@@ -529,12 +538,13 @@ interface MessageActionsProps {
     copied: boolean;
     onCopy: () => void;
     onRegenerate?: () => void;
+    events?: AgentEvent[];
 }
 
 /**
  * Action buttons for assistant messages (copy, regenerate)
  */
-function MessageActions({ copied, onCopy, onRegenerate }: MessageActionsProps): JSX.Element {
+function MessageActions({ copied, onCopy, onRegenerate, events }: MessageActionsProps): JSX.Element {
     const t = useTranslations("chat");
 
     return (
@@ -580,6 +590,13 @@ function MessageActions({ copied, onCopy, onRegenerate }: MessageActionsProps): 
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span>{t("regenerate")}</span>
                 </button>
+            )}
+
+            {events && events.length > 0 && (
+                <>
+                    <div className="flex-1" />
+                    <CostIndicator events={events} />
+                </>
             )}
         </div>
     );

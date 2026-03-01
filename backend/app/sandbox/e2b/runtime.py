@@ -69,6 +69,61 @@ class E2BRuntime:
         """
         return f"https://{self._sandbox.get_host(port)}"
 
+    async def save_snapshot(
+        self,
+        paths: list[str],
+        snapshot_id: str,
+    ) -> bytes:
+        """Tar specified paths and return the archive bytes."""
+        import shlex
+
+        paths_str = " ".join(shlex.quote(p) for p in paths)
+        archive_path = f"/tmp/snapshot_{snapshot_id}.tar.gz"
+
+        # Create tar archive of the specified paths (ignore missing paths)
+        result = await self.run_command(
+            f"tar czf {shlex.quote(archive_path)} {paths_str} 2>/dev/null || true",
+            timeout=120,
+        )
+
+        # Read the archive as bytes
+        data = await self.read_file(archive_path, format="bytes")
+        if not isinstance(data, bytes):
+            data = data.encode("utf-8")
+
+        # Clean up the temp archive
+        await self.run_command(f"rm -f {shlex.quote(archive_path)}", timeout=10)
+
+        return data
+
+    async def restore_snapshot(
+        self,
+        snapshot_data: bytes,
+        target_path: str,
+    ) -> bool:
+        """Restore a tar archive to the specified target path."""
+        import shlex
+
+        archive_path = "/tmp/_restore_snapshot.tar.gz"
+
+        # Write archive to sandbox
+        await self.write_file(archive_path, snapshot_data)
+
+        # Extract to target path
+        await self.run_command(
+            f"mkdir -p {shlex.quote(target_path)}",
+            timeout=10,
+        )
+        result = await self.run_command(
+            f"tar xzf {shlex.quote(archive_path)} -C {shlex.quote(target_path)}",
+            timeout=120,
+        )
+
+        # Clean up
+        await self.run_command(f"rm -f {shlex.quote(archive_path)}", timeout=10)
+
+        return result.exit_code == 0
+
     async def kill(self) -> None:
         """Kill the E2B sandbox."""
         await self._sandbox.kill()

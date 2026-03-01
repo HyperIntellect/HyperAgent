@@ -236,7 +236,7 @@ async def _execute_sub_task(
         sub_task.status = "failed"
         sub_task.error = str(e)
 
-    sub_task.duration_ms = int((time.time() - start) * 1000)
+    sub_task.duration_ms = max(1, int((time.time() - start) * 1000))
     return sub_task
 
 
@@ -326,11 +326,22 @@ class ParallelExecutor:
         sub_tasks = await decompose_query(query, max_tasks=self.max_agents, provider=provider)
         emit(events.stage("parallel_decompose", f"Created {len(sub_tasks)} sub-tasks", "completed"))
 
-        # Emit individual task events
+        # Emit parallel_start event with all sub-agent IDs and focus areas
+        emit({
+            "type": "parallel_start",
+            "sub_agents": [
+                {"sub_agent_id": task.id, "focus_area": task.focus_area}
+                for task in sub_tasks
+            ],
+            "count": len(sub_tasks),
+        })
+
+        # Emit individual task events with sub_agent_id
         for task in sub_tasks:
             emit({
                 "type": "parallel_task",
                 "task_id": task.id,
+                "sub_agent_id": task.id,
                 "query": task.query,
                 "focus_area": task.focus_area,
                 "status": "pending",
@@ -351,11 +362,12 @@ class ParallelExecutor:
                 sub_tasks[i].error = str(result)
             # Otherwise result is the updated SubTask (same object)
 
-        # Emit completion events per task
+        # Emit completion events per task with sub_agent_id
         for task in sub_tasks:
             emit({
                 "type": "parallel_task",
                 "task_id": task.id,
+                "sub_agent_id": task.id,
                 "focus_area": task.focus_area,
                 "status": task.status,
                 "duration_ms": task.duration_ms,
@@ -365,12 +377,20 @@ class ParallelExecutor:
         failed = sum(1 for t in sub_tasks if t.status == "failed")
         emit(events.stage("parallel_execute", f"Completed {successful}/{len(sub_tasks)} sub-queries", "completed"))
 
+        # Emit parallel_complete event
+        emit({
+            "type": "parallel_complete",
+            "successful": successful,
+            "failed": failed,
+            "total": len(sub_tasks),
+        })
+
         # Phase 3: Synthesize
         emit(events.stage("parallel_synthesize", "Synthesizing results...", "running"))
         synthesis = await synthesize_results(query, sub_tasks, provider=provider)
         emit(events.stage("parallel_synthesize", "Synthesis complete", "completed"))
 
-        total_duration = int((time.time() - start) * 1000)
+        total_duration = max(1, int((time.time() - start) * 1000))
 
         return ParallelExecutionResult(
             sub_tasks=sub_tasks,
@@ -492,7 +512,7 @@ async def _execute_general_sub_task(
         sub_task.status = "failed"
         sub_task.error = str(e)
 
-    sub_task.duration_ms = int((time.time() - start) * 1000)
+    sub_task.duration_ms = max(1, int((time.time() - start) * 1000))
     return sub_task
 
 
@@ -583,6 +603,16 @@ class GeneralParallelExecutor:
         sub_tasks = await decompose_general_task(query, max_tasks=self.max_agents, provider=provider)
         emit(events.stage("parallel_decompose", f"Created {len(sub_tasks)} sub-tasks", "completed"))
 
+        # Emit parallel_start event with all sub-agent IDs and focus areas
+        emit({
+            "type": "parallel_start",
+            "sub_agents": [
+                {"sub_agent_id": task.id, "focus_area": task.focus_area}
+                for task in sub_tasks
+            ],
+            "count": len(sub_tasks),
+        })
+
         for task in sub_tasks:
             emit(events.parallel_task(
                 task_id=task.id,
@@ -621,12 +651,20 @@ class GeneralParallelExecutor:
         failed = sum(1 for t in sub_tasks if t.status == "failed")
         emit(events.stage("parallel_execute", f"Completed {successful}/{len(sub_tasks)} sub-tasks", "completed"))
 
+        # Emit parallel_complete event
+        emit({
+            "type": "parallel_complete",
+            "successful": successful,
+            "failed": failed,
+            "total": len(sub_tasks),
+        })
+
         # Phase 3: Synthesize
         emit(events.stage("parallel_synthesize", "Synthesizing results...", "running"))
         synthesis = await synthesize_general_results(query, sub_tasks, provider=provider)
         emit(events.stage("parallel_synthesize", "Synthesis complete", "completed"))
 
-        total_duration = int((time.time() - start) * 1000)
+        total_duration = max(1, int((time.time() - start) * 1000))
 
         return ParallelExecutionResult(
             sub_tasks=sub_tasks,

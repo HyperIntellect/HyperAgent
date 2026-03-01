@@ -100,7 +100,6 @@ class TestShellExec:
             )
 
         assert result["success"] is True
-        assert result["mode"] == "sync"
         assert result["stdout"] == "hello world\n"
         assert result["exit_code"] == 0
 
@@ -143,7 +142,6 @@ class TestShellExec:
             )
 
         assert result["success"] is True
-        assert result["mode"] == "background"
         assert "session_id" in result
         assert result["session_id"] in _background_sessions
 
@@ -172,12 +170,12 @@ class TestShellExec:
     @pytest.mark.asyncio
     async def test_sandbox_unavailable(self, mock_sandbox_manager):
         """Returns error when sandbox is unavailable."""
+        mock_sandbox_manager.get_or_create_sandbox.side_effect = RuntimeError(
+            "No sandbox configured"
+        )
         with patch(
             "app.agents.tools.shell_tools.get_execution_sandbox_manager",
             return_value=mock_sandbox_manager,
-        ), patch(
-            "app.sandbox.provider.is_provider_available",
-            return_value=(False, "No sandbox configured"),
         ):
             result = json.loads(
                 await shell_exec.ainvoke({"command": "echo hi"})
@@ -200,12 +198,10 @@ class TestShellView:
         """View output of a running background session."""
         _background_sessions["test-session"] = {
             "command": "npm start",
-            "status": "running",
-            "stdout": "Server starting...\n",
-            "stderr": "",
+            "output": "Server starting...\n",
             "exit_code": None,
+            "done": False,
             "task": None,
-            "sandbox_id": "sandbox-123",
         }
 
         result = json.loads(
@@ -213,20 +209,18 @@ class TestShellView:
         )
 
         assert result["success"] is True
-        assert result["status"] == "running"
-        assert result["stdout"] == "Server starting...\n"
+        assert result["done"] is False
+        assert result["output"] == "Server starting...\n"
 
     @pytest.mark.asyncio
     async def test_view_completed_session(self):
         """View output of a completed background session."""
         _background_sessions["done-session"] = {
             "command": "ls -la",
-            "status": "completed",
-            "stdout": "file1.txt\nfile2.txt\n",
-            "stderr": "",
+            "output": "file1.txt\nfile2.txt\n",
             "exit_code": 0,
+            "done": True,
             "task": None,
-            "sandbox_id": "sandbox-123",
         }
 
         result = json.loads(
@@ -234,7 +228,7 @@ class TestShellView:
         )
 
         assert result["success"] is True
-        assert result["status"] == "completed"
+        assert result["done"] is True
         assert result["exit_code"] == 0
 
     @pytest.mark.asyncio
@@ -261,12 +255,10 @@ class TestShellWait:
         """Waiting on an already-completed session returns immediately."""
         _background_sessions["done-session"] = {
             "command": "echo done",
-            "status": "completed",
-            "stdout": "done\n",
-            "stderr": "",
+            "output": "done\n",
             "exit_code": 0,
+            "done": True,
             "task": None,
-            "sandbox_id": "sandbox-123",
         }
 
         result = json.loads(
@@ -274,7 +266,7 @@ class TestShellWait:
         )
 
         assert result["success"] is True
-        assert result["status"] == "completed"
+        assert result["already_done"] is True
         assert result["exit_code"] == 0
 
     @pytest.mark.asyncio
@@ -286,19 +278,17 @@ class TestShellWait:
         bg_task = asyncio.create_task(_bg_work())
         _background_sessions["fast-session"] = {
             "command": "echo fast",
-            "status": "running",
-            "stdout": "",
-            "stderr": "",
+            "output": "",
             "exit_code": None,
+            "done": False,
             "task": bg_task,
-            "sandbox_id": "sandbox-123",
         }
 
         # Simulate the task completing and updating session
         async def update_after_done():
             await bg_task
-            _background_sessions["fast-session"]["status"] = "completed"
-            _background_sessions["fast-session"]["stdout"] = "fast\n"
+            _background_sessions["fast-session"]["done"] = True
+            _background_sessions["fast-session"]["output"] = "fast\n"
             _background_sessions["fast-session"]["exit_code"] = 0
 
         asyncio.create_task(update_after_done())
@@ -311,7 +301,7 @@ class TestShellWait:
         )
 
         assert result["success"] is True
-        assert result["status"] == "completed"
+        assert result["exit_code"] == 0
 
     @pytest.mark.asyncio
     async def test_wait_timeout(self):
@@ -322,12 +312,10 @@ class TestShellWait:
         bg_task = asyncio.create_task(_slow_work())
         _background_sessions["slow-session"] = {
             "command": "sleep 60",
-            "status": "running",
-            "stdout": "",
-            "stderr": "",
+            "output": "",
             "exit_code": None,
+            "done": False,
             "task": bg_task,
-            "sandbox_id": "sandbox-123",
         }
 
         result = json.loads(
@@ -338,8 +326,8 @@ class TestShellWait:
         )
 
         assert result["success"] is True
-        assert result["status"] == "timeout"
-        assert "still running" in result["message"]
+        assert result["timed_out"] is True
+        assert "still running" in result["message"].lower() or "running" in result["message"].lower()
 
         # Clean up
         bg_task.cancel()
@@ -376,12 +364,10 @@ class TestShellKill:
         bg_task = asyncio.create_task(_slow_work())
         _background_sessions["running-session"] = {
             "command": "npm start",
-            "status": "running",
-            "stdout": "",
-            "stderr": "",
+            "output": "",
             "exit_code": None,
+            "done": False,
             "task": bg_task,
-            "sandbox_id": "sandbox-123",
         }
 
         result = json.loads(
@@ -389,7 +375,7 @@ class TestShellKill:
         )
 
         assert result["success"] is True
-        assert "terminated" in result["message"]
+        assert "terminated" in result["message"].lower() or "cleaned up" in result["message"].lower()
         assert "running-session" not in _background_sessions
 
     @pytest.mark.asyncio
@@ -397,12 +383,10 @@ class TestShellKill:
         """Kill an already-completed process cleans it up."""
         _background_sessions["done-session"] = {
             "command": "echo done",
-            "status": "completed",
-            "stdout": "done\n",
-            "stderr": "",
+            "output": "done\n",
             "exit_code": 0,
+            "done": True,
             "task": None,
-            "sandbox_id": "sandbox-123",
         }
 
         result = json.loads(

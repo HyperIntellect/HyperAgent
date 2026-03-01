@@ -485,5 +485,47 @@ def inject_summary_as_context(
     return result
 
 
+def get_stable_prefix(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Extract the stable prefix from a message list (system messages at the start).
+
+    The stable prefix consists of all leading SystemMessage instances.
+    These typically include the system prompt, user memories, and context
+    summaries -- content that doesn't change between ReAct iterations.
+    Keeping this prefix unchanged allows KV-cache reuse.
+
+    Args:
+        messages: Full message list
+
+    Returns:
+        List of leading SystemMessage instances
+    """
+    prefix: list[BaseMessage] = []
+    for msg in messages:
+        if isinstance(msg, SystemMessage):
+            prefix.append(msg)
+        else:
+            break
+    return prefix
+
+
+def get_dynamic_suffix(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Extract the dynamic suffix from a message list.
+
+    The dynamic suffix starts at the first non-SystemMessage. This
+    portion changes each iteration (new user/AI/tool messages) and sits
+    after the stable prefix for KV-cache efficiency.
+
+    Args:
+        messages: Full message list
+
+    Returns:
+        List of messages after the leading system messages
+    """
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, SystemMessage):
+            return messages[i:]
+    return []
+
+
 # Default compressor instance
 default_compressor = ContextCompressor()

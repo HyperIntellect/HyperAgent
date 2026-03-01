@@ -80,10 +80,17 @@ DEFAULT_CONTENT_LIMIT = 500
 class StreamProcessor:
     """Process and normalize events from the agent graph."""
 
-    def __init__(self, user_id: str | None, task_id: str | None, thread_id: str):
+    def __init__(
+        self,
+        user_id: str | None,
+        task_id: str | None,
+        thread_id: str,
+        run_id: str | None = None,
+    ):
         self.user_id = user_id
         self.task_id = task_id
         self.thread_id = thread_id
+        self.run_id = run_id
 
         # State tracking
         self.emitted_tool_call_ids: set[str] = set()
@@ -97,6 +104,9 @@ class StreamProcessor:
         self.node_path: list[str] = []
         self.current_content_node: str | None = None
         self.streamed_tokens: bool = False
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_cached_tokens: int = 0
 
     def node_matches_streaming(self, node_name: str, node_key: str) -> bool:
         """Check if a node name matches a streaming config key."""
@@ -139,6 +149,10 @@ class StreamProcessor:
 
         elif event_type == "on_chain_error":
             async for e in self._handle_chain_error(node_name, event):
+                yield e
+
+        elif event_type == "on_chat_model_end":
+            async for e in self._handle_chat_model_end(event):
                 yield e
 
         elif event_type == "on_custom_event":
@@ -401,6 +415,50 @@ class StreamProcessor:
                 if content:
                     self.streamed_tokens = True
                     yield {"type": "token", "content": content}
+
+    async def _handle_chat_model_end(self, event: dict) -> AsyncGenerator[dict[str, Any], None]:
+        """Extract token usage from on_chat_model_end events.
+
+        LangGraph astream_events v2 includes usage_metadata on the output
+        AIMessage when the provider reports token counts.
+        """
+        output = (event.get("data") or {}).get("output")
+        if output is None:
+            return
+
+        usage_meta = getattr(output, "usage_metadata", None)
+        if not usage_meta or not isinstance(usage_meta, dict):
+            return
+
+        input_tokens = usage_meta.get("input_tokens", 0)
+        output_tokens = usage_meta.get("output_tokens", 0)
+        if input_tokens == 0 and output_tokens == 0:
+            return
+
+        cached_tokens = 0
+        input_detail = usage_meta.get("input_token_details") or {}
+        if isinstance(input_detail, dict):
+            cached_tokens = input_detail.get("cache_read", 0) or 0
+
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.total_cached_tokens += cached_tokens
+
+        resp_meta = getattr(output, "response_metadata", {}) or {}
+        model_name = resp_meta.get("model_name", "")
+
+        from app.services.usage_tracker import calculate_cost
+
+        cost = calculate_cost(model_name, input_tokens, output_tokens, cached_tokens)
+
+        yield agent_events.usage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=cached_tokens,
+            cost_usd=cost,
+            model=model_name,
+            tier="",
+        )
 
     async def _handle_tool_start(self, event: dict) -> AsyncGenerator[dict[str, Any], None]:
         run_id = event.get("run_id", "")
@@ -723,6 +781,8 @@ class StreamProcessor:
             "terminal_complete",
             "browser_stream",
             "workspace_update",
+            "plan_overview",
+            "plan_step_completed",
         ):
             return
 

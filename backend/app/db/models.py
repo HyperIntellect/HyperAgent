@@ -649,3 +649,154 @@ class Memory(Base):
             "last_accessed": self.last_accessed.isoformat() if self.last_accessed else None,
             "access_count": self.access_count,
         }
+
+
+class AgentRun(Base):
+    """Durable run ledger entry for agent executions."""
+
+    __tablename__ = "agent_runs"
+    __table_args__ = (
+        Index("ix_agent_runs_user_created", "user_id", "created_at"),
+        Index("ix_agent_runs_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, default="task")
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    execution_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
+    run_labels: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    budget_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "conversation_id": self.conversation_id,
+            "user_id": self.user_id,
+            "mode": self.mode,
+            "objective": self.objective,
+            "status": self.status,
+            "execution_mode": self.execution_mode,
+            "run_labels": self.run_labels or {},
+            "budget": self.budget_json or {},
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "last_error": self.last_error,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AgentStep(Base):
+    """Step-level transitions for planner/executor runs."""
+
+    __tablename__ = "agent_steps"
+    __table_args__ = (
+        Index("ix_agent_steps_run_created", "run_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    step_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    step_type: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentEvent(Base):
+    """Normalized event stream for replay and audit."""
+
+    __tablename__ = "agent_events"
+    __table_args__ = (
+        Index("ix_agent_events_run_created", "run_id", "created_at"),
+        Index("ix_agent_events_dedup_key", "dedup_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    step_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    dedup_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ToolExecution(Base):
+    """Tool execution audit records with policy decision."""
+
+    __tablename__ = "tool_executions"
+    __table_args__ = (
+        Index("ix_tool_executions_run_created", "run_id", "created_at"),
+        Index("ix_tool_executions_tool_name", "tool_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    step_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    tool_call_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    tool_args: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    policy_decision: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    policy_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SandboxSnapshot(Base):
+    """Persistent sandbox workspace snapshot for restoring state after disconnect."""
+
+    __tablename__ = "sandbox_snapshots"
+    __table_args__ = (
+        Index("ix_sandbox_snapshots_user_task_type", "user_id", "task_id", "sandbox_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    sandbox_type: Mapped[str] = mapped_column(String(20), nullable=False)  # execution, app
+    storage_key: Mapped[str] = mapped_column(String(500), nullable=False, unique=True)
+    paths_included: Mapped[list] = mapped_column(JSON, nullable=False)  # list of paths
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "task_id": self.task_id,
+            "sandbox_type": self.sandbox_type,
+            "storage_key": self.storage_key,
+            "paths_included": self.paths_included,
+            "size_bytes": self.size_bytes,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+        }

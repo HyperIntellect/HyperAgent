@@ -6,7 +6,8 @@ web applications in an isolated sandbox environment.
 
 import json
 import re
-from typing import Any
+from operator import add
+from typing import Annotated, Any
 
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END, StateGraph
@@ -100,8 +101,9 @@ class AppBuilderState(SkillState):
     preview_url: str | None
     build_errors: list[str]
     current_step: str
-    # Events to emit during streaming
-    pending_events: list[dict[str, Any]]
+    retry_count: int
+    # Events to emit during streaming — accumulated across nodes via `add` reducer
+    pending_events: Annotated[list[dict[str, Any]], add]
 
 
 class AppBuilderSkill(Skill):
@@ -157,6 +159,11 @@ class AppBuilderSkill(Skill):
             },
         },
         required_tools=[],
+        risk_level="high",
+        side_effect_level="high",
+        data_sensitivity="sensitive",
+        network_scope="sandbox_only",
+        idempotency_hint=False,
         max_execution_time_seconds=600,  # 10 minutes for full build
         max_iterations=20,
         tags=["app", "web", "development", "react", "nextjs", "vue", "express", "fastapi"],
@@ -180,8 +187,8 @@ class AppBuilderSkill(Skill):
                 task_id=state.get("task_id"),
             )
 
-            # Emit stage event for planning
-            pending_events = state.get("pending_events", [])
+            # Fresh event list per node — Annotated[..., add] accumulates across nodes
+            pending_events = []
             pending_events.append(
                 agent_events.stage(
                     name="plan",
@@ -336,30 +343,38 @@ Be practical and create a working app, not just boilerplate. Focus on the core f
             """Scaffold the project using the selected template."""
             plan = state.get("plan", {})
             template = plan.get("template", "react")
+            if template not in APP_TEMPLATES:
+                logger.warning(
+                    "app_builder_unknown_template_fallback",
+                    requested=template,
+                    fallback="react",
+                )
+                template = "react"
             user_id = state.get("user_id")
             task_id = state.get("task_id")
 
-            # Check if sandbox is available
-            from app.sandbox import is_app_sandbox_available
-            if not is_app_sandbox_available():
-                logger.error("app_builder_sandbox_not_available", reason="E2B API key not configured")
-                pending_events = state.get("pending_events", [])
+            # Check if sandbox is available (provider-agnostic)
+            from app.sandbox.provider import is_provider_available
+            available, reason = is_provider_available("app")
+            if not available:
+                logger.error("app_builder_sandbox_not_available", reason=reason)
+                pending_events = []
                 pending_events.append(
                     agent_events.stage(
                         name="scaffold",
-                        description="Sandbox not available - E2B API key not configured",
+                        description=f"Sandbox not available - {reason}",
                         status="failed",
                     )
                 )
                 return {
-                    "error": "E2B sandbox not available. Please configure E2B_API_KEY.",
+                    "error": f"Sandbox not available: {reason}",
                     "current_step": "error",
                     "iterations": state.get("iterations", 0) + 1,
                     "pending_events": pending_events,
                 }
 
-            # Emit stage event for scaffolding
-            pending_events = state.get("pending_events", [])
+            # Fresh event list per node — Annotated[..., add] accumulates across nodes
+            pending_events = []
             pending_events.append(
                 agent_events.stage(
                     name="scaffold",
@@ -385,17 +400,32 @@ Be practical and create a working app, not just boilerplate. Focus on the core f
                     template=template,
                 )
 
-                # Emit terminal command event for scaffolding
-                template_config = APP_TEMPLATES.get(template, APP_TEMPLATES["react"])
-                scaffold_cmd = template_config["scaffold_cmd"]
-                pending_events.append(
-                    agent_events.terminal_command(
-                        command=scaffold_cmd,
-                        cwd="/home/user",
+                template_config = APP_TEMPLATES.get(template)
+                if not template_config:
+                    logger.warning(
+                        "app_builder_template_config_fallback",
+                        requested=template,
+                        fallback="react",
                     )
-                )
+                    template_config = APP_TEMPLATES["react"]
 
                 result = await manager.scaffold_project(session, template)
+
+                # Emit terminal command event — show cached vs live scaffold
+                if result.get("cached"):
+                    pending_events.append(
+                        agent_events.terminal_command(
+                            command=f"# Using cached {template} template (fast path)",
+                            cwd="/home/user",
+                        )
+                    )
+                else:
+                    pending_events.append(
+                        agent_events.terminal_command(
+                            command=template_config["scaffold_cmd"],
+                            cwd="/home/user",
+                        )
+                    )
 
                 # Emit terminal output or error based on result
                 if result.get("success"):
@@ -509,8 +539,8 @@ Be practical and create a working app, not just boilerplate. Focus on the core f
             user_id = state.get("user_id")
             task_id = state.get("task_id")
 
-            # Emit stage event for file generation
-            pending_events = state.get("pending_events", [])
+            # Fresh event list per node — Annotated[..., add] accumulates across nodes
+            pending_events = []
             pending_events.append(
                 agent_events.stage(
                     name="generate",
@@ -579,6 +609,13 @@ Be practical and create a working app, not just boilerplate. Focus on the core f
                 async def _generate_one(
                     file_path: str, file_desc: str
                 ) -> FileContent:
+                    # Build context of other files for import/export coordination
+                    other_files = "\n".join(
+                        f"- {fp}: {fd}"
+                        for fp, fd in valid_specs
+                        if fp != file_path
+                    )
+
                     prompt = f"""Generate the complete content for \
 this file in a {template} project:
 
@@ -586,6 +623,9 @@ App Description: {description}
 
 File: {file_path}
 Purpose: {file_desc}
+
+Other files in this project (coordinate imports/exports):
+{other_files}
 
 Project Structure:
 {project_structure}
@@ -624,23 +664,30 @@ The code should be complete and immediately runnable."""
                         description=file_desc,
                     )
 
-                # Launch all LLM calls in parallel
+                # Launch all LLM calls in parallel (capped at 5 concurrent)
                 valid_specs = [
                     (fs.get("path", ""), fs.get("description", ""))
                     for fs in files_to_create
                     if fs.get("path")
                 ]
+                _sem = _asyncio.Semaphore(5)
+
+                async def _generate_with_limit(fp: str, fd: str) -> FileContent:
+                    async with _sem:
+                        return await _generate_one(fp, fd)
+
                 tasks = [
-                    _generate_one(fp, fd) for fp, fd in valid_specs
+                    _generate_with_limit(fp, fd) for fp, fd in valid_specs
                 ]
                 results = await _asyncio.gather(
                     *tasks, return_exceptions=True
                 )
 
                 # Write files sequentially and emit events
-                sandbox_id = (
-                    session.sandbox_id or task_id or user_id or "app-sandbox"
-                )
+                sandbox_id = session.sandbox_id
+                if not sandbox_id:
+                    logger.warning("app_builder_missing_sandbox_id", task_id=task_id)
+                    sandbox_id = f"app-{task_id or user_id or 'unknown'}"
                 for (file_path, file_desc), gen_result in zip(
                     valid_specs, results
                 ):
@@ -756,8 +803,9 @@ The code should be complete and immediately runnable."""
                 pending_events.append(
                     agent_events.stage(
                         name="generate",
-                        description=f"Generated {len(generated_files)} files",
-                        status="completed" if not build_errors else "running",
+                        description=f"Generated {len(generated_files)}/{total_files} files"
+                        + (f" ({len(build_errors)} failed)" if build_errors else ""),
+                        status="completed",
                     )
                 )
 
@@ -792,8 +840,8 @@ The code should be complete and immediately runnable."""
             user_id = state.get("user_id")
             task_id = state.get("task_id")
 
-            # Emit stage event for server start
-            pending_events = state.get("pending_events", [])
+            # Fresh event list per node — Annotated[..., add] accumulates across nodes
+            pending_events = []
             pending_events.append(
                 agent_events.stage(
                     name="server",
@@ -845,7 +893,10 @@ The code should be complete and immediately runnable."""
                         )
                     )
                     # Emit browser_stream event for virtual computer display
-                    sandbox_id = session.sandbox_id or task_id or user_id or "app-sandbox"
+                    sandbox_id = session.sandbox_id
+                    if not sandbox_id:
+                        logger.warning("app_builder_missing_sandbox_id", task_id=task_id)
+                        sandbox_id = f"app-{task_id or user_id or 'unknown'}"
                     pending_events.append(
                         agent_events.browser_stream(
                             stream_url=result["preview_url"],
@@ -898,6 +949,183 @@ The code should be complete and immediately runnable."""
                     "pending_events": pending_events,
                 }
 
+        async def fix_build_errors(state: AppBuilderState) -> dict:
+            """Attempt to fix build errors by reading server log and regenerating broken files."""
+            error = state.get("error")
+            build_errors = state.get("build_errors", [])
+            if not error and not build_errors:
+                # No errors — pass through to finalize
+                return {
+                    "current_step": "fix_build_errors",
+                    "iterations": state.get("iterations", 0) + 1,
+                    "pending_events": [],
+                }
+
+            user_id = state.get("user_id")
+            task_id = state.get("task_id")
+            retry_count = state.get("retry_count", 0)
+
+            pending_events = []
+
+            if retry_count >= 2:
+                pending_events.append(
+                    agent_events.stage(
+                        name="fix_errors",
+                        description="Max retries exceeded, proceeding with errors",
+                        status="failed",
+                    )
+                )
+                return {
+                    "current_step": "fix_build_errors_exhausted",
+                    "iterations": state.get("iterations", 0) + 1,
+                    "pending_events": pending_events,
+                }
+
+            pending_events.append(
+                agent_events.stage(
+                    name="fix_errors",
+                    description=f"Attempting to fix build errors (attempt {retry_count + 1}/2)",
+                    status="running",
+                )
+            )
+
+            try:
+                manager = get_app_sandbox_manager()
+                session = await manager.get_session(user_id=user_id, task_id=task_id)
+
+                if not session:
+                    return {
+                        "current_step": "fix_build_errors_exhausted",
+                        "iterations": state.get("iterations", 0) + 1,
+                        "pending_events": pending_events,
+                    }
+
+                # Read the server error log
+                log_result = await session.sandbox.run_command(
+                    "cat /tmp/dev_server.log 2>/dev/null", timeout=5
+                )
+                error_log = log_result.stdout[:3000] if log_result.stdout else ""
+
+                if not error_log:
+                    pending_events.append(
+                        agent_events.stage(
+                            name="fix_errors",
+                            description="No error log available to diagnose",
+                            status="failed",
+                        )
+                    )
+                    return {
+                        "current_step": "fix_build_errors_exhausted",
+                        "iterations": state.get("iterations", 0) + 1,
+                        "pending_events": pending_events,
+                    }
+
+                generated_files = state.get("generated_files", [])
+                file_paths = [f["path"] for f in generated_files]
+
+                # Ask LLM to identify and fix the broken file
+                llm = llm_service.get_llm_for_tier(ModelTier.PRO)
+                fix_prompt = f"""The app build failed with this error log:
+{error_log}
+
+Generated files: {file_paths}
+
+Identify which file has the error and provide the corrected content.
+Respond with JSON: {{"file_path": "path/to/file", "content": "corrected file content"}}
+Output ONLY the JSON, no explanation."""
+
+                resp = await llm.ainvoke([HumanMessage(content=fix_prompt)])
+                text = resp.content or ""
+                if not text:
+                    text = resp.additional_kwargs.get("reasoning_content", "")
+
+                parsed = _parse_json_from_text(text)
+                if not parsed or "file_path" not in parsed or "content" not in parsed:
+                    pending_events.append(
+                        agent_events.stage(
+                            name="fix_errors",
+                            description="Could not parse fix from LLM",
+                            status="failed",
+                        )
+                    )
+                    return {
+                        "current_step": "fix_build_errors_exhausted",
+                        "retry_count": retry_count + 1,
+                        "iterations": state.get("iterations", 0) + 1,
+                        "pending_events": pending_events,
+                    }
+
+                fix_path = parsed["file_path"]
+                fix_content = _strip_code_fences(parsed["content"])
+
+                # Write the fixed file
+                write_result = await manager.write_file(session, fix_path, fix_content)
+                if write_result.get("success"):
+                    pending_events.append(
+                        agent_events.terminal_command(
+                            command=f"# Fix applied: {fix_path}",
+                            cwd="/home/user/app",
+                        )
+                    )
+                    pending_events.append(
+                        agent_events.terminal_output(
+                            content=f"Rewrote {fix_path} ({len(fix_content)} bytes)",
+                            stream="stdout",
+                        )
+                    )
+                    pending_events.append(
+                        agent_events.stage(
+                            name="fix_errors",
+                            description=f"Fixed {fix_path}, retrying server",
+                            status="completed",
+                        )
+                    )
+
+                    logger.info(
+                        "app_builder_fix_applied",
+                        path=fix_path,
+                        retry_count=retry_count + 1,
+                    )
+
+                    # Clear error so start_server can retry
+                    return {
+                        "current_step": "fix_build_errors",
+                        "retry_count": retry_count + 1,
+                        "error": None,
+                        "iterations": state.get("iterations", 0) + 1,
+                        "pending_events": pending_events,
+                    }
+                else:
+                    pending_events.append(
+                        agent_events.stage(
+                            name="fix_errors",
+                            description=f"Failed to write fix for {fix_path}",
+                            status="failed",
+                        )
+                    )
+                    return {
+                        "current_step": "fix_build_errors_exhausted",
+                        "retry_count": retry_count + 1,
+                        "iterations": state.get("iterations", 0) + 1,
+                        "pending_events": pending_events,
+                    }
+
+            except Exception as e:
+                logger.error("app_builder_fix_errors_failed", error=str(e))
+                pending_events.append(
+                    agent_events.stage(
+                        name="fix_errors",
+                        description="Error recovery failed",
+                        status="failed",
+                    )
+                )
+                return {
+                    "current_step": "fix_build_errors_exhausted",
+                    "retry_count": retry_count + 1,
+                    "iterations": state.get("iterations", 0) + 1,
+                    "pending_events": pending_events,
+                }
+
         async def finalize(state: AppBuilderState) -> dict:
             """Finalize the build and prepare output."""
             plan = state.get("plan", {})
@@ -905,8 +1133,8 @@ The code should be complete and immediately runnable."""
             preview_url = state.get("preview_url")
             build_errors = state.get("build_errors", [])
 
-            # Emit stage event for finalization
-            pending_events = state.get("pending_events", [])
+            # Fresh event list per node — Annotated[..., add] accumulates across nodes
+            pending_events = []
             pending_events.append(
                 agent_events.stage(
                     name="finalize",
@@ -972,6 +1200,15 @@ The code should be complete and immediately runnable."""
             current = state.get("current_step", "plan")
             error = state.get("error")
 
+            if current == "start_server" and not error:
+                return "finalize"
+            if current == "start_server" and error:
+                return "fix_build_errors"
+            if current == "fix_build_errors":
+                # Retry: error was cleared → go back to start_server
+                return "start_server"
+            if current == "fix_build_errors_exhausted":
+                return "finalize"
             if error:
                 return "finalize"
 
@@ -979,7 +1216,6 @@ The code should be complete and immediately runnable."""
                 "plan": "scaffold",
                 "scaffold": "generate_files",
                 "generate_files": "start_server",
-                "start_server": "finalize",
                 "error": "finalize",
             }
 
@@ -990,6 +1226,7 @@ The code should be complete and immediately runnable."""
         graph.add_node("scaffold", scaffold_project)
         graph.add_node("generate_files", generate_files)
         graph.add_node("start_server", start_server)
+        graph.add_node("fix_build_errors", fix_build_errors)
         graph.add_node("finalize", finalize)
 
         # Set entry point
@@ -1024,6 +1261,15 @@ The code should be complete and immediately runnable."""
             "start_server",
             route_step,
             {
+                "fix_build_errors": "fix_build_errors",
+                "finalize": "finalize",
+            },
+        )
+        graph.add_conditional_edges(
+            "fix_build_errors",
+            route_step,
+            {
+                "start_server": "start_server",
                 "finalize": "finalize",
             },
         )

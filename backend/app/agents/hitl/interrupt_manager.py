@@ -384,3 +384,33 @@ def create_input_interrupt(
         default_action="skip",
         timeout_seconds=timeout_seconds or settings.hitl_decision_timeout,
     )
+
+
+def create_confirm_interrupt(
+    title: str,
+    message: str,
+    interrupt_id: str | None = None,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
+    """Create a confirm interrupt for yes/no confirmation.
+
+    Args:
+        title: Dialog title
+        message: Confirmation prompt
+        interrupt_id: Optional custom interrupt ID
+        timeout_seconds: Optional custom timeout
+
+    Returns:
+        Interrupt event dict
+    """
+    if interrupt_id is None:
+        interrupt_id = get_interrupt_manager().generate_interrupt_id()
+
+    return events.interrupt(
+        interrupt_id=interrupt_id,
+        interrupt_type=InterruptType.CONFIRM,
+        title=title,
+        message=message,
+        default_action="deny",
+        timeout_seconds=timeout_seconds or settings.hitl_decision_timeout,
+    )

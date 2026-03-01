@@ -16,6 +16,7 @@ from app.api import (
     projects,
     providers,
     query,
+    runs,
     sandbox,
     sandbox_proxy,
     skills,
@@ -74,6 +75,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("skill_registry_init_failed", error=str(e))
         # Continue without skills in development
+
+    # Validate mandatory tool capability contracts at startup.
+    from app.agents.tools.registry import validate_tool_contracts
+
+    validate_tool_contracts()
 
     # Initialize guardrails (lazy init on first use, but log config)
     if settings.guardrails_enabled:
@@ -206,3 +212,4 @@ app.include_router(sandbox_proxy.router, prefix=settings.api_prefix, tags=["sand
 app.include_router(usage.router, prefix=settings.api_prefix, tags=["usage"])
 app.include_router(memory.router, prefix=settings.api_prefix, tags=["memory"])
 app.include_router(mcp.router, prefix=settings.api_prefix, tags=["mcp"])
+app.include_router(runs.router, prefix=settings.api_prefix, tags=["runs"])

@@ -297,8 +297,8 @@ async def route_query(state: SupervisorState) -> dict:
                 "If the response doesn't match your intent, try rephrasing your query."
             )
 
-        # Check if this research query would benefit from parallel execution
-        if result.agent == AgentType.RESEARCH and is_parallelizable_query(query):
+        # Check if this query would benefit from parallel execution.
+        if is_parallelizable_query(query):
             routing_event["parallel_eligible"] = True
 
         # Emit reasoning event alongside routing decision
@@ -312,6 +312,7 @@ async def route_query(state: SupervisorState) -> dict:
             "selected_agent": result.agent.value,
             "routing_reason": result.reason,
             "routing_confidence": result.confidence,
+            "parallel_eligible": bool(routing_event.get("parallel_eligible", False)),
             "events": [routing_event, reasoning_event],
         }
     except Exception as e:

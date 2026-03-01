@@ -2,7 +2,8 @@
 """Pull all Docker images required by the BoxLite local sandbox provider.
 
 Reads image names from .env (or falls back to defaults) and pulls them
-via `docker pull`.
+via `docker pull`.  Images prefixed with ``hyperagent/`` are built locally
+from their corresponding Dockerfile instead of being pulled from a registry.
 """
 
 import subprocess
@@ -13,7 +14,12 @@ from pathlib import Path
 DEFAULTS = {
     "BOXLITE_CODE_IMAGE": "python:3.12-slim",
     "BOXLITE_DESKTOP_IMAGE": "boxlite/desktop:latest",
-    "BOXLITE_APP_IMAGE": "node:20-slim",
+    "BOXLITE_APP_IMAGE": "hyperagent/app-sandbox:latest",
+}
+
+# Maps image prefixes to their Dockerfiles (relative to repo root)
+_BUILDABLE_IMAGES = {
+    "hyperagent/app-sandbox": "backend/docker/app-sandbox.Dockerfile",
 }
 
 
@@ -60,6 +66,39 @@ def check_docker() -> bool:
         return False
 
 
+def _repo_root() -> Path:
+    """Return the repository root (two levels above this script)."""
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def build_app_image(image: str) -> bool:
+    """Build a local Docker image from its Dockerfile. Returns True on success."""
+    # Find the matching Dockerfile by checking image name prefixes
+    dockerfile = None
+    for prefix, df in _BUILDABLE_IMAGES.items():
+        if image.startswith(prefix):
+            dockerfile = df
+            break
+
+    if dockerfile is None:
+        print(f"  No Dockerfile found for {image}, skipping build", file=sys.stderr)
+        return False
+
+    repo_root = _repo_root()
+    dockerfile_path = repo_root / dockerfile
+    context_dir = dockerfile_path.parent
+
+    if not dockerfile_path.exists():
+        print(f"  Dockerfile not found: {dockerfile_path}", file=sys.stderr)
+        return False
+
+    result = subprocess.run(
+        ["docker", "build", "-f", str(dockerfile_path), "-t", image, str(context_dir)],
+        timeout=600,
+    )
+    return result.returncode == 0
+
+
 def pull_image(image: str) -> bool:
     """Pull a single Docker image. Returns True on success."""
     result = subprocess.run(
@@ -86,19 +125,25 @@ def main() -> int:
 
     for i, (label, image) in enumerate(images, 1):
         print(f"[{i}/{total}] {label}: {image}")
-        if pull_image(image):
-            print(f"  -> OK\n")
+        if image.startswith("hyperagent/"):
+            print("  -> Building locally...")
+            ok = build_app_image(image)
         else:
-            print(f"  -> FAILED\n", file=sys.stderr)
+            ok = pull_image(image)
+
+        if ok:
+            print("  -> OK\n")
+        else:
+            print("  -> FAILED\n", file=sys.stderr)
             failed.append(image)
 
     if failed:
-        print(f"\n{len(failed)} image(s) failed to pull:", file=sys.stderr)
+        print(f"\n{len(failed)} image(s) failed to pull/build:", file=sys.stderr)
         for img in failed:
             print(f"  - {img}", file=sys.stderr)
         return 1
 
-    print(f"All {total} images pulled successfully.")
+    print(f"All {total} images ready.")
     return 0
 
 

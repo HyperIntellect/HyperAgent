@@ -138,6 +138,95 @@ def _build_todo_md(steps: list[dict], completed_up_to: int = 0) -> str:
     return "\n".join(lines) + "\n"
 
 
+_TODO_PATH = "/home/user/.hyperagent/todo.md"
+_TODO_MAX_SIZE = 10 * 1024  # 10KB cap
+_TODO_INJECT_CAP = 2000  # Max chars injected into prompt
+
+
+def _count_todo_progress(content: str) -> tuple[int, int]:
+    """Count checked and total checklist items in markdown content.
+
+    Returns:
+        Tuple of (checked, total)
+    """
+    checked = content.count("- [x]")
+    unchecked = content.count("- [ ]")
+    return checked, checked + unchecked
+
+
+async def _read_sandbox_todo(user_id: str | None, task_id: str | None) -> str | None:
+    """Read todo.md from sandbox, returning None if unavailable.
+
+    Gracefully handles missing sandbox or file. Caps output at _TODO_MAX_SIZE.
+    """
+    try:
+        from app.sandbox.execution_sandbox_manager import get_execution_sandbox_manager
+        from app.sandbox.provider import is_provider_available
+
+        available, _ = is_provider_available("execution")
+        if not available:
+            return None
+
+        manager = get_execution_sandbox_manager()
+        session = await manager.get_or_create_sandbox(user_id=user_id, task_id=task_id)
+        runtime = session.executor
+
+        if not runtime.sandbox_id:
+            return None
+
+        from app.sandbox import file_operations
+
+        result = await file_operations.read_file(runtime, _TODO_PATH)
+        if not result.get("success"):
+            return None
+
+        content = result.get("content", "")
+        if len(content) > _TODO_MAX_SIZE:
+            content = content[:_TODO_MAX_SIZE] + "\n... [truncated]"
+        return content
+    except Exception:
+        return None
+
+
+async def _write_sandbox_todo(
+    user_id: str | None,
+    task_id: str | None,
+    content: str,
+) -> bool:
+    """Write todo.md to sandbox, returning True on success.
+
+    Creates the .hyperagent directory if needed. Caps content at _TODO_MAX_SIZE.
+    """
+    try:
+        from app.sandbox.execution_sandbox_manager import get_execution_sandbox_manager
+        from app.sandbox.provider import is_provider_available
+
+        available, _ = is_provider_available("execution")
+        if not available:
+            return False
+
+        manager = get_execution_sandbox_manager()
+        session = await manager.get_or_create_sandbox(user_id=user_id, task_id=task_id)
+        runtime = session.executor
+
+        if not runtime.sandbox_id:
+            return False
+
+        # Ensure directory exists
+        await runtime.execute("mkdir -p /home/user/.hyperagent")
+
+        # Cap content
+        if len(content) > _TODO_MAX_SIZE:
+            content = content[:_TODO_MAX_SIZE]
+
+        from app.sandbox import file_operations
+
+        result = await file_operations.write_file(runtime, _TODO_PATH, content)
+        return result.get("success", False)
+    except Exception:
+        return False
+
+
 async def reason_node(state: TaskState) -> dict:
     """ReAct reason node: LLM reasons about what to do next.
 
@@ -338,6 +427,39 @@ async def reason_node(state: TaskState) -> dict:
     all_tools = _get_cached_task_tools()
     llm_with_tools = llm.bind_tools(all_tools) if all_tools else llm
 
+    # === KV-Cache Optimization: Stable Prefix Tracking ===
+    # The stable prefix (system prompt + tool schemas) should not change
+    # between iterations. Track its hash to detect accidental invalidation.
+    from app.agents.context_compression import get_stable_prefix
+    from app.agents.tools.registry import get_soft_disabled_message, get_soft_disabled_tools
+
+    stable_prefix = get_stable_prefix(lc_messages)
+    if stable_prefix:
+        import hashlib
+
+        prefix_content = "".join(
+            str(m.content) for m in stable_prefix
+        )
+        current_prefix_hash = hashlib.md5(prefix_content.encode()).hexdigest()
+        prev_prefix_hash = state.get("prefix_hash")
+        if prev_prefix_hash and prev_prefix_hash != current_prefix_hash:
+            logger.debug(
+                "kv_cache_prefix_changed",
+                prev_hash=prev_prefix_hash[:8],
+                new_hash=current_prefix_hash[:8],
+            )
+        result_prefix_hash = current_prefix_hash
+    else:
+        result_prefix_hash = None
+
+    # Inject soft-disabled tools notice at the end of the stable prefix
+    # (preserves tool schemas in prefix for KV-cache while signaling unavailability)
+    disabled_tools = get_soft_disabled_tools()
+    if disabled_tools:
+        disabled_msg = get_soft_disabled_message(disabled_tools)
+        if disabled_msg:
+            lc_messages.append(SystemMessage(content=disabled_msg))
+
     # === Context Engineering: Todo-list as Attention Manipulation ===
     # Inject the active todo/plan into messages after every tool call to keep
     # the global plan in the model's recent attention window. This prevents
@@ -387,10 +509,18 @@ async def reason_node(state: TaskState) -> dict:
         messages_for_llm = list(lc_messages) + [completion_hint]
         logger.info("planned_execution_all_steps_completed")
     elif active_todo:
-        # Non-planned execution but has an active todo from previous iterations
-        # This keeps the working context fresh across many tool calls
+        # Non-planned execution but has an active todo from previous iterations.
+        # Prefer sandbox-persisted todo.md for richer context, falling back
+        # to in-state active_todo.
+        todo_text = active_todo
+        sandbox_todo = await _read_sandbox_todo(
+            state.get("user_id"), state.get("task_id"),
+        )
+        if sandbox_todo:
+            todo_text = sandbox_todo[:_TODO_INJECT_CAP]
+            logger.debug("sandbox_todo_injected")
         todo_reminder = SystemMessage(content=(
-            f"[Active Task Context]\n{active_todo}"
+            f"[Active Task Context]\n{todo_text}"
         ))
         messages_for_llm = list(lc_messages) + [todo_reminder]
         logger.debug("active_todo_injected")
@@ -448,6 +578,9 @@ async def reason_node(state: TaskState) -> dict:
         # Include context summary if compression occurred
         if new_context_summary:
             result["context_summary"] = new_context_summary
+        # Track prefix hash for KV-cache stability monitoring
+        if result_prefix_hash:
+            result["prefix_hash"] = result_prefix_hash
         return result
     except Exception as e:
         logger.error("task_reason_failed", error=str(e))
@@ -539,6 +672,7 @@ async def act_node(state: TaskState) -> dict:
             hooks=hooks,
             user_id=state.get("user_id"),
             task_id=state.get("task_id"),
+            run_id=state.get("run_id"),
             hitl_partition=True,
             hitl_check=hitl_check,
         )
@@ -657,6 +791,86 @@ async def act_node(state: TaskState) -> dict:
                     revision_count=prev_revisions + 1,
                 )
 
+    # --- Anti-Repetition: Detect consecutive identical tool calls ---
+    if tool_messages and not pending_interrupt:
+        import hashlib as _hashlib
+
+        prev_hashes = list(state.get("last_tool_calls_hash", []) or [])
+
+        # Compute hash for each tool call in the current batch
+        for tc in pending_tool_calls:
+            tc_name = tc.get("name", "")
+            tc_args = tc.get("args", {})
+            # Sort args for deterministic hashing
+            try:
+                args_str = json.dumps(tc_args, sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                args_str = str(tc_args)
+            call_hash = _hashlib.md5(f"{tc_name}:{args_str}".encode()).hexdigest()[:12]
+            prev_hashes.append(call_hash)
+
+        # Keep only last 5 hashes
+        if len(prev_hashes) > 5:
+            prev_hashes = prev_hashes[-5:]
+        result["last_tool_calls_hash"] = prev_hashes
+
+        # Count consecutive identical hashes from the end
+        if len(prev_hashes) >= 2:
+            last_hash = prev_hashes[-1]
+            consecutive_count = 0
+            for h in reversed(prev_hashes):
+                if h == last_hash:
+                    consecutive_count += 1
+                else:
+                    break
+
+            if consecutive_count >= 3:
+                # Force plan revision after 3+ repeats
+                prev_revisions = state.get("plan_revision_count", 0)
+                lc_messages.append(SystemMessage(content=(
+                    f"[System: Repetition detected - you have called the same tool with identical "
+                    f"arguments {consecutive_count} times consecutively. "
+                    f"The previous approach is NOT working. You MUST change strategy:\n"
+                    f"- Use a DIFFERENT tool\n"
+                    f"- Modify the arguments significantly\n"
+                    f"- Break the problem into smaller steps\n"
+                    f"- Ask the user for clarification if stuck\n"
+                    f"Do NOT retry the same call again."
+                )))
+                result["plan_revision_count"] = prev_revisions + 1
+                event_list.append(events.reasoning(
+                    thinking=f"Tool call repeated {consecutive_count}x. Forcing strategy change.",
+                    confidence=0.1,
+                    context="error_recovery",
+                ))
+                logger.warning(
+                    "anti_repetition_force_revision",
+                    consecutive_count=consecutive_count,
+                    hash=last_hash,
+                )
+            elif consecutive_count >= 2:
+                # Inject variation prompt after 2 repeats
+                repeated_tool = pending_tool_calls[-1].get("name", "unknown") if pending_tool_calls else "unknown"
+                lc_messages.append(SystemMessage(content=(
+                    f"[System: Repetition detected - you have called {repeated_tool} with identical "
+                    f"arguments {consecutive_count} times. "
+                    f"The previous approach may not be working. Try a DIFFERENT strategy:\n"
+                    f"- Use a different tool\n"
+                    f"- Modify the arguments significantly\n"
+                    f"- Break the problem into smaller steps\n"
+                    f"- Ask the user for clarification if stuck"
+                )))
+                event_list.append(events.reasoning(
+                    thinking=f"Tool call repeated {consecutive_count}x. Suggesting variation.",
+                    confidence=0.3,
+                    context="error_recovery",
+                ))
+                logger.info(
+                    "anti_repetition_variation_prompt",
+                    consecutive_count=consecutive_count,
+                    tool=repeated_tool,
+                )
+
     # --- Context Engineering: Update active_todo for attention manipulation ---
     if tool_messages and not pending_interrupt:
         # Build a summary of what was just done for the active todo
@@ -684,19 +898,31 @@ async def act_node(state: TaskState) -> dict:
                 "execution_plan_parsed",
                 step_count=len(parsed_plan),
             )
-            # Write initial todo.md to sandbox
-            try:
-                from app.agents.tools.file_tools import file_write
-
-                todo_content = _build_todo_md(parsed_plan)
-                await file_write.ainvoke({
-                    "path": "/home/user/todo.md",
-                    "content": todo_content,
-                    "user_id": state.get("user_id"),
-                    "task_id": state.get("task_id"),
-                })
-            except Exception:
-                pass  # Non-critical - don't fail if todo.md can't be written
+            # Write initial todo.md to sandbox (persisted)
+            todo_content = _build_todo_md(parsed_plan)
+            wrote = await _write_sandbox_todo(
+                state.get("user_id"), state.get("task_id"), todo_content,
+            )
+            if wrote:
+                checked, total = _count_todo_progress(todo_content)
+                event_list.append(events.todo_update(
+                    content=todo_content, checked=checked, total=total,
+                ))
+                logger.debug("sandbox_todo_written", path=_TODO_PATH)
+            # Emit plan_overview event with all steps for the frontend progress view
+            event_list.append(events.plan_overview(
+                steps=[
+                    {
+                        "id": i,
+                        "title": step.get("action", f"Step {i + 1}"),
+                        "description": step.get("tool_or_skill", ""),
+                        "status": "pending",
+                    }
+                    for i, step in enumerate(parsed_plan)
+                ],
+                total_steps=len(parsed_plan),
+                completed_steps=0,
+            ))
             # Emit plan_step event for the first step
             first_step = parsed_plan[0]
             event_list.append(events.plan_step(
@@ -720,6 +946,13 @@ async def act_node(state: TaskState) -> dict:
                 action=completed_step.get("action", ""),
                 status="completed",
             ))
+            # Emit plan_step_completed for frontend progress view
+            event_list.append(events.plan_step_completed(
+                step_id=current_idx,
+                status="completed",
+                completed_steps=current_idx + 1,
+                total_steps=len(execution_plan),
+            ))
 
             # Record step result for verification
             step_summary = " | ".join(
@@ -735,19 +968,17 @@ async def act_node(state: TaskState) -> dict:
             next_idx = current_idx + 1
             result["current_step_index"] = next_idx
 
-            # Update todo.md with completed step
-            try:
-                from app.agents.tools.file_tools import file_write
-
-                todo_content = _build_todo_md(execution_plan, completed_up_to=next_idx)
-                await file_write.ainvoke({
-                    "path": "/home/user/todo.md",
-                    "content": todo_content,
-                    "user_id": state.get("user_id"),
-                    "task_id": state.get("task_id"),
-                })
-            except Exception:
-                pass  # Non-critical - don't fail if todo.md can't be written
+            # Update todo.md with completed step (persisted)
+            todo_content = _build_todo_md(execution_plan, completed_up_to=next_idx)
+            wrote = await _write_sandbox_todo(
+                state.get("user_id"), state.get("task_id"), todo_content,
+            )
+            if wrote:
+                checked, total = _count_todo_progress(todo_content)
+                event_list.append(events.todo_update(
+                    content=todo_content, checked=checked, total=total,
+                ))
+                logger.debug("sandbox_todo_updated", step=next_idx)
 
             if next_idx < len(execution_plan):
                 # Emit running event for next step
@@ -805,6 +1036,8 @@ async def verify_node(state: TaskState) -> dict:
     event_list = []
     verification_results = []
     verified_steps = []
+    verification_status = "error"
+    verification_retry_hint: str | None = None
 
     # --- Phase 1: Automated checks on tool outputs ---
     _ERROR_PATTERNS = ("Error:", "Failed:", "Traceback", "Exception:", "error:", "FAIL")
@@ -827,10 +1060,13 @@ async def verify_node(state: TaskState) -> dict:
         }
 
         if has_errors:
+            finding = f"Step {step_num} output contains error indicators."
             event_list.append(events.verification(
                 status="warning",
                 message=f"Step {step_num} ({action}) had errors in output",
                 step=step_num,
+                findings=[finding],
+                retry_hint="Review failed output and adjust tool/arguments before retrying.",
             ))
         elif has_success:
             verified_steps.append(step_num)
@@ -875,26 +1111,102 @@ async def verify_node(state: TaskState) -> dict:
 
         verdict = verification_text.strip().split(":")[0].upper().strip()
         if verdict.startswith("PASS"):
-            event_list.append(events.verification(status="passed", message=verification_text))
+            verification_status = "passed"
+            event_list.append(events.verification(
+                status="passed",
+                message=verification_text,
+                findings=["Verifier confirmed all required outcomes were satisfied."],
+            ))
             logger.info("verification_passed", query=original_query[:100])
         elif verdict.startswith("PARTIAL"):
-            event_list.append(events.verification(status="partial", message=verification_text))
+            verification_status = "partial"
+            verification_retry_hint = "Address missing deliverables and regenerate an updated plan."
+            event_list.append(events.verification(
+                status="partial",
+                message=verification_text,
+                findings=["Verifier found partially completed objectives."],
+                retry_hint=verification_retry_hint,
+            ))
             logger.info("verification_partial", query=original_query[:100], detail=verification_text[:200])
         else:
-            event_list.append(events.verification(status="failed", message=verification_text))
+            verification_status = "failed"
+            verification_retry_hint = "Revise plan and use an alternative approach for failed steps."
+            event_list.append(events.verification(
+                status="failed",
+                message=verification_text,
+                findings=["Verifier determined the goal was not achieved."],
+                retry_hint=verification_retry_hint,
+            ))
             logger.warning("verification_failed", query=original_query[:100], detail=verification_text[:200])
     except Exception as e:
         logger.error("verification_node_error", error=str(e))
+        verification_status = "error"
+        verification_retry_hint = "Verification failed due to model error. Retry with a simplified plan."
         event_list.append(events.verification(
             status="error",
             message=f"Verification could not be completed: {e}",
+            findings=["Verifier runtime error."],
+            retry_hint=verification_retry_hint,
         ))
 
-    return {
+    prev_attempts = int(state.get("verification_attempts", 0))
+    should_adapt = verification_status in {"partial", "failed", "error"}
+    next_attempts = prev_attempts + 1 if should_adapt else prev_attempts
+
+    result: dict = {
         "events": event_list,
         "verification_results": verification_results,
         "verified_steps": verified_steps,
+        "verification_status": verification_status,
+        "verification_attempts": next_attempts,
+        "verification_retry_hint": verification_retry_hint,
     }
+
+    if should_adapt:
+        retry_hint = verification_retry_hint or "Revise plan and retry with a different approach."
+        lc_messages = list(state.get("lc_messages", []))
+        lc_messages.append(SystemMessage(content=(
+            "Verification gate failed. You must adapt your plan before proceeding.\n"
+            f"Retry hint: {retry_hint}\n"
+            "Actions required:\n"
+            "1. Re-plan remaining work (use task_planning mode='revise' if useful).\n"
+            "2. Avoid repeating the same failed tool sequence.\n"
+            "3. Continue only after producing new actionable steps."
+        )))
+        result["lc_messages"] = lc_messages
+        result["execution_plan"] = []
+        result["current_step_index"] = 0
+        result["tool_iterations"] = 0
+
+    return result
+
+
+def should_adapt_or_finalize(state: TaskState) -> Literal["reason", "finalize"]:
+    """Route post-verification flow to adaptation or finalization."""
+    status = (state.get("verification_status") or "").lower()
+    if status == "passed":
+        return "finalize"
+
+    attempts = int(state.get("verification_attempts", 0))
+    execution_mode = (state.get("execution_mode") or "auto").lower()
+    max_attempts = 1 if execution_mode == "strict" else 2
+    if attempts >= max_attempts:
+        logger.warning(
+            "verification_attempt_limit_reached",
+            status=status,
+            attempts=attempts,
+            max_attempts=max_attempts,
+            execution_mode=execution_mode,
+        )
+        return "finalize"
+
+    logger.info(
+        "verification_routing_to_adaptation",
+        status=status,
+        attempts=attempts,
+        max_attempts=max_attempts,
+    )
+    return "reason"
 
 
 async def finalize_node(state: TaskState) -> dict:
@@ -1104,6 +1416,7 @@ async def wait_interrupt_node(state: TaskState) -> dict:
                     tool=tool_map.get(tool_name),
                     user_id=user_id,
                     task_id=task_id,
+                    run_id=state.get("run_id"),
                 )
                 hooks = TaskToolHooks(state=state, skip_before_execution=True)
                 exec_result = await execute_tool(ctx, hooks=hooks, config=config)
@@ -1136,6 +1449,11 @@ async def wait_interrupt_node(state: TaskState) -> dict:
                 result_str = "User skipped this question."
             elif action in ("select", "input"):
                 result_str = f"User responded: {value}" if value else "User skipped this question."
+            elif action in ("approve", "deny"):
+                # Confirm type sends approve/deny
+                result_str = f"User responded: {value}" if value else (
+                    "User confirmed." if action == "approve" else "User declined."
+                )
             else:
                 result_str = f"User action: {action}"
 
@@ -1247,8 +1565,15 @@ def create_task_graph() -> StateGraph:
     # After waiting for interrupt, go back to reasoning
     graph.add_edge("wait_interrupt", "reason")
 
-    # Verify leads to finalize
-    graph.add_edge("verify", "finalize")
+    # Verify can route to adaptation loop or finalize
+    graph.add_conditional_edges(
+        "verify",
+        should_adapt_or_finalize,
+        {
+            "reason": "reason",
+            "finalize": "finalize",
+        },
+    )
 
     # Finalize and end
     graph.add_edge("finalize", END)

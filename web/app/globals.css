@@ -5,27 +5,27 @@
 
 @layer base {
   :root {
-    /* Light Theme - Modern neutral with indigo accent (OKLCH) */
-    --background: 0.985 0.005 260;
-    --foreground: 0.25 0.02 260;
-    --card: 0.99 0.003 260;
-    --card-foreground: 0.20 0.02 260;
+    /* Light Theme - Modern neutral with teal accent (OKLCH) */
+    --background: 0.985 0.004 230;
+    --foreground: 0.23 0.012 250;
+    --card: 0.993 0.002 230;
+    --card-foreground: 0.20 0.012 250;
     --popover: 1.00 0 0;
-    --popover-foreground: 0.20 0.02 260;
-    --primary: 0.55 0.15 260;
+    --popover-foreground: 0.20 0.012 250;
+    --primary: 0.609 0.113 221;           /* #0891B2 — logo teal */
     --primary-foreground: 1.00 0 0;
-    --secondary: 0.955 0.008 260;
-    --secondary-foreground: 0.40 0.02 260;
-    --muted: 0.96 0.005 260;
-    --muted-foreground: 0.55 0.02 260;
-    --accent: 0.95 0.01 260;
-    --accent-foreground: 0.20 0.02 260;
-    --accent-cyan: 200 75% 45%;
+    --secondary: 0.960 0.004 230;
+    --secondary-foreground: 0.42 0.01 250;
+    --muted: 0.955 0.003 230;
+    --muted-foreground: 0.55 0.01 250;
+    --accent: 0.950 0.005 230;
+    --accent-foreground: 0.20 0.012 250;
+    --accent-cyan: 192 91% 37%;           /* #0891B2 — logo teal */
     --destructive: 0.55 0.22 27;
     --destructive-foreground: 1.00 0 0;
-    --border: 0.92 0.005 260;
-    --input: 0.93 0.008 260;
-    --ring: 0.55 0.15 260;
+    --border: 0.925 0.004 230;
+    --input: 0.935 0.005 230;
+    --ring: 0.609 0.113 221;
     --radius: 0.625rem;
 
     /* Semantic status colors (HSL) */
@@ -44,6 +44,9 @@
     --terminal-tool: 187 100% 42%;
     --terminal-skill: 270 60% 65%;
     --terminal-browser: 30 100% 50%;
+    /* Terminal internal structure */
+    --terminal-border: 220 13% 18%;
+    --terminal-input-bg: 220 13% 12%;
 
     /* Chart colors (OKLCH) */
     --chart-1: 0.56 0.13 43.00;
@@ -53,14 +56,14 @@
     --chart-5: 0.56 0.13 42.06;
 
     /* Sidebar (OKLCH) */
-    --sidebar: 0.975 0.005 260;
-    --sidebar-foreground: 0.35 0.015 260;
-    --sidebar-primary: 0.55 0.15 260;
+    --sidebar: 0.975 0.004 230;
+    --sidebar-foreground: 0.37 0.008 250;
+    --sidebar-primary: 0.609 0.113 221;   /* #0891B2 — logo teal */
     --sidebar-primary-foreground: 1.00 0 0;
-    --sidebar-accent: 0.94 0.008 260;
-    --sidebar-accent-foreground: 0.25 0.02 260;
-    --sidebar-border: 0.93 0.005 260;
-    --sidebar-ring: 0.55 0.15 260;
+    --sidebar-accent: 0.945 0.005 230;
+    --sidebar-accent-foreground: 0.25 0.012 250;
+    --sidebar-border: 0.935 0.004 230;
+    --sidebar-ring: 0.609 0.113 221;
 
     /* Shadows */
     --shadow-2xs: 0 1px 2px 0 rgba(0,0,0,0.03);
@@ -76,27 +79,27 @@
 
   .dark {
     /* Dark Theme - Refined dark with cool undertone (OKLCH)
-       Hierarchy: muted(0.18) < background(0.20) < card(0.22) < popover(0.24) < accent(0.25) < secondary(0.26) < border(0.30) */
-    --background: 0.20 0.01 260;
-    --foreground: 0.88 0.008 260;
-    --card: 0.22 0.01 260;
-    --card-foreground: 0.92 0.005 260;
-    --popover: 0.24 0.01 260;
-    --popover-foreground: 0.90 0.005 260;
-    --primary: 0.65 0.14 260;
-    --primary-foreground: 1.00 0 0;
-    --secondary: 0.26 0.01 260;
-    --secondary-foreground: 0.82 0.008 260;
-    --muted: 0.18 0.005 260;
-    --muted-foreground: 0.60 0.01 260;
-    --accent: 0.25 0.015 260;
-    --accent-foreground: 0.92 0.005 260;
-    --accent-cyan: 200 70% 55%;
+       Hierarchy: muted(0.16) < background(0.18) < card(0.20) < popover(0.22) < accent(0.23) < secondary(0.24) < border(0.28) */
+    --background: 0.18 0.008 250;
+    --foreground: 0.90 0.005 230;
+    --card: 0.20 0.008 250;
+    --card-foreground: 0.92 0.004 230;
+    --popover: 0.22 0.008 250;
+    --popover-foreground: 0.90 0.004 230;
+    --primary: 0.796 0.134 212;            /* #22D3EE — logo bright teal */
+    --primary-foreground: 0.13 0.01 250;
+    --secondary: 0.24 0.008 250;
+    --secondary-foreground: 0.82 0.005 230;
+    --muted: 0.16 0.004 250;
+    --muted-foreground: 0.58 0.008 250;
+    --accent: 0.23 0.01 250;
+    --accent-foreground: 0.92 0.004 230;
+    --accent-cyan: 188 86% 53%;           /* #22D3EE — logo bright teal */
     --destructive: 0.60 0.21 25;
     --destructive-foreground: 1.00 0 0;
-    --border: 0.30 0.01 260;
-    --input: 0.32 0.01 260;
-    --ring: 0.65 0.14 260;
+    --border: 0.28 0.008 250;
+    --input: 0.30 0.008 250;
+    --ring: 0.796 0.134 212;
 
     /* Semantic status colors (HSL) */
     --success: 142 71% 50%;
@@ -114,6 +117,9 @@
     --terminal-tool: 187 100% 50%;
     --terminal-skill: 270 60% 70%;
     --terminal-browser: 30 100% 55%;
+    /* Terminal internal structure (dark mode) */
+    --terminal-border: 220 13% 14%;
+    --terminal-input-bg: 220 13% 8%;
 
     /* Chart colors (OKLCH, dark mode) */
     --chart-1: 0.56 0.13 43.00;
@@ -123,14 +129,14 @@
     --chart-5: 0.56 0.13 42.06;
 
     /* Sidebar (OKLCH, dark mode) */
-    --sidebar: 0.18 0.008 260;
-    --sidebar-foreground: 0.82 0.008 260;
-    --sidebar-primary: 0.65 0.14 260;
-    --sidebar-primary-foreground: 1.00 0 0;
-    --sidebar-accent: 0.24 0.012 260;
-    --sidebar-accent-foreground: 0.88 0.008 260;
-    --sidebar-border: 0.28 0.008 260;
-    --sidebar-ring: 0.45 0.01 260;
+    --sidebar: 0.16 0.006 250;
+    --sidebar-foreground: 0.82 0.005 230;
+    --sidebar-primary: 0.796 0.134 212;   /* #22D3EE — logo bright teal */
+    --sidebar-primary-foreground: 0.13 0.01 250;
+    --sidebar-accent: 0.22 0.01 250;
+    --sidebar-accent-foreground: 0.88 0.005 230;
+    --sidebar-border: 0.26 0.006 250;
+    --sidebar-ring: 0.45 0.008 250;
     --tracking-normal: 0em;
     --radius: 0.625rem;
 
@@ -469,8 +475,8 @@ button {
 
 /* Brand Typography - clean and minimal */
 .brand-title {
-  font-family: var(--font-plus-jakarta-sans), system-ui, sans-serif;
-  font-weight: 800;
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  font-weight: 700;
   letter-spacing: -0.04em;
   color: oklch(var(--foreground));
 }
@@ -500,7 +506,7 @@ button {
 
 /* Hero display text - clean and readable */
 .display-text {
-  font-family: var(--font-plus-jakarta-sans), system-ui, sans-serif;
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.2;
@@ -631,6 +637,19 @@ button {
   animation: progress-indeterminate 1.5s ease-in-out infinite;
 }
 
+/* Accordion expand/collapse animation */
+.accordion-grid {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 200ms ease-out;
+}
+.accordion-grid.accordion-open {
+    grid-template-rows: 1fr;
+}
+.accordion-grid > .accordion-inner {
+    overflow: hidden;
+}
+
 /* Accessibility: Respect prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -678,4 +697,30 @@ button {
 
 .text-terminal-browser {
   color: hsl(var(--terminal-browser));
+}
+
+.bg-terminal-border {
+  background-color: hsl(var(--terminal-border));
+}
+
+.border-terminal-border {
+  border-color: hsl(var(--terminal-border));
+}
+
+.bg-terminal-input-bg {
+  background-color: hsl(var(--terminal-input-bg));
+}
+
+/* Terminal cursor blink animation */
+@keyframes terminal-cursor-blink {
+  0%, 49% {
+    opacity: 1;
+  }
+  50%, 100% {
+    opacity: 0;
+  }
+}
+
+.animate-terminal-cursor {
+  animation: terminal-cursor-blink 1s step-end infinite;
 }

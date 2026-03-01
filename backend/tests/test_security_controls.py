@@ -16,6 +16,8 @@ from app.agents.tools.tool_pipeline import (
     ResearchToolHooks,
     ToolExecutionContext,
 )
+from app.agents.tools.registry import get_all_tools, validate_tool_contracts
+from app.agents.policy import PolicyInput, get_policy_engine
 from app.api.sandbox import _validate_sandbox_path
 from app.api.skills import (
     _enforce_skill_ownership_or_builtin,
@@ -222,3 +224,25 @@ class TestToolHookGuardrails:
         assert result.is_error is True
         assert result.message is not None
         assert "Tool blocked:" in result.message.content
+
+
+class TestPolicyCoverage:
+    """Tests for policy/tool contract coverage across registry tools."""
+
+    def test_tool_contracts_cover_registry(self):
+        validate_tool_contracts()
+
+    def test_policy_engine_covers_all_tools(self):
+        engine = get_policy_engine()
+        tools = get_all_tools()
+        assert tools, "Expected at least one registered tool"
+        for tool in tools:
+            decision = engine.decide(
+                PolicyInput(
+                    tool_name=tool.name,
+                    tool_args={},
+                    hitl_enabled=True,
+                    risk_threshold="high",
+                )
+            )
+            assert decision.decision.value in {"allow", "require_approval", "deny"}

@@ -252,6 +252,7 @@
                 "generate_slides": "幻灯片生成",
                 "skill_slide_generation": "幻灯片生成",
                 "invoke_skill": "调用技能",
+                "skill_invoke_skill": "调用技能",
                 "list_skills": "技能列表",
                 "ask_user": "用户输入",
                 "create_app_project": "创建应用项目",
@@ -601,6 +602,7 @@
         "yes": "是",
         "no": "否",
         "approveAlways": "本次会话中批准所有类似操作",
+        "noArguments": "无参数",
         "inputPlaceholder": "输入您的回复...",
         "timeoutWarning": "操作将在 {seconds} 秒后被拒绝",
         "toolApproval": "需要工具批准",
@@ -610,7 +612,14 @@
         "approved": "已批准",
         "denied": "已拒绝",
         "skipped": "已跳过",
-        "timeout": "已超时"
+        "timeout": "已超时",
+        "approvalBrowserNav": "智能体想要导航到：\n\n**{url}**\n\n这将打开浏览器并访问外部内容。",
+        "approvalBrowserClick": "智能体想要点击浏览器中的 **{target}**。\n\n这可能会触发当前页面上的操作。",
+        "approvalBrowserType": "智能体想要在浏览器的 **{target}** 中输入内容。\n\n这可能会触发当前页面上的操作。",
+        "approvalCodeExecution": "智能体想要在沙箱环境中执行代码。",
+        "approvalFileModify": "智能体想要修改文件：\n\n**{path}**",
+        "approvalFileDelete": "智能体想要删除文件：\n\n**{path}**",
+        "approvalGenericTool": "智能体想要使用 **{toolName}**。"
     },
     "appPreview": {
         "appRunning": "应用运行中",
@@ -718,13 +727,7 @@
         "statusConnected": "已连接",
         "statusConnecting": "连接中",
         "statusDisconnected": "未连接",
-        "settings": "设置",
-        "followAgent": "跟随智能体",
-        "autoOpen": "自动打开面板",
-        "on": "开",
-        "off": "关",
         "terminal": "终端",
-        "plan": "计划",
         "browser": "浏览器",
         "files": "文件",
         "close": "关闭",
@@ -735,14 +738,7 @@
         "expand": "展开",
         "terminalOutput": "终端输出",
         "errorMessage": "计算机面板中发生了意外错误。",
-        "usingTerminal": "正在使用终端",
-        "usingPlan": "智能体活动日志",
-        "usingBrowser": "正在使用浏览器",
-        "usingFiles": "正在浏览文件",
         "live": "实时",
-        "play": "播放",
-        "pause": "暂停",
-        "playbackSpeed": "播放速度",
         "previousStep": "上一步",
         "nextStep": "下一步",
         "goToLive": "跳到实时",
@@ -783,9 +779,18 @@
             "typing": "正在输入：\"{text}\"",
             "browserAction": "正在执行浏览器操作"
         },
+        "taskPlan": "任务计划",
+        "parallelExecution": "并行执行",
+        "todoChecklist": "待办清单",
         "planInProgress": "进行中...",
         "planProgress": "{completed}/{total} 已完成",
         "planFailed": "{count} 个失败",
+        "laneStatus": {
+            "pending": "等待中",
+            "running": "运行中",
+            "completed": "已完成",
+            "failed": "失败"
+        },
         "errorBoundary": {
             "title": "出现错误",
             "maxRetries": "已达最大重试次数，请刷新页面。",
@@ -803,7 +808,6 @@
             "hours": "{count}小时",
             "days": "{count}天"
         },
-        "splitView": "分屏视图",
         "sendCommand": "发送命令",
         "typeCommand": "输入命令...",
         "editFile": "编辑文件",
@@ -831,7 +835,25 @@
             "copied": "已复制",
             "fileCount": "个文件",
             "folderCount": "个文件夹",
-            "fileTooLarge": "文件过大，无法预览（{size} MB）"
+            "fileTooLarge": "文件过大，无法预览（{size} MB）",
+            "updated": "已更新",
+            "fileUpdated": "此文件最近已更新",
+            "reload": "重新加载"
+        }
+    },
+    "taskPlan": {
+        "executionPlan": "执行计划",
+        "steps": "步骤",
+        "stepsCount": "个步骤",
+        "after": "在第 {steps} 步之后",
+        "successCriteria": "成功标准",
+        "potentialChallenges": "潜在挑战",
+        "questionsToClarify": "待澄清问题",
+        "stepComplexity": "{complexity}复杂度",
+        "complexity": {
+            "simple": "简单",
+            "moderate": "中等",
+            "complex": "复杂"
         }
     }
 }

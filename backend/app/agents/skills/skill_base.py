@@ -31,7 +31,12 @@ class SkillMetadata(BaseModel):
     output_schema: dict[str, Any]  # JSON schema
     required_tools: list[str] = Field(default_factory=list)
     # Explicit risk metadata for governance ("low"|"medium"|"high")
-    risk_level: Literal["low", "medium", "high"] | None = None
+    risk_level: Literal["low", "medium", "high"]
+    side_effect_level: Literal["none", "low", "medium", "high"] = "low"
+    data_sensitivity: Literal["public", "internal", "sensitive"] = "internal"
+    network_scope: Literal["none", "sandbox_only", "external"] = "none"
+    idempotency_hint: bool = True
+    requires_confirmation_patterns: list[str] = Field(default_factory=list)
     max_execution_time_seconds: int = 300
     max_iterations: int = 10
     author: str = "hyperagent"

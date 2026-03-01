@@ -14,6 +14,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTranslations } from "next-intl";
 
 /**
  * Plan step from task_planning skill output
@@ -44,20 +45,20 @@ interface TaskPlanPanelProps {
   defaultExpanded?: boolean;
 }
 
-// Complexity badge colors
+// Complexity badge colors — labels come from i18n via `taskPlan.complexity.*`
 const COMPLEXITY_CONFIG = {
   simple: {
-    label: "Simple",
+    labelKey: "complexity.simple" as const,
     color: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
     dot: "bg-emerald-500",
   },
   moderate: {
-    label: "Moderate",
+    labelKey: "complexity.moderate" as const,
     color: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
     dot: "bg-amber-500",
   },
   complex: {
-    label: "Complex",
+    labelKey: "complexity.complex" as const,
     color: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
     dot: "bg-rose-500",
   },
@@ -88,6 +89,7 @@ function ToolBadge({ name }: { name: string }) {
 
 // Dependency indicator
 function DependencyBadge({ stepNumbers }: { stepNumbers: number[] }) {
+  const t = useTranslations("taskPlan");
   if (stepNumbers.length === 0) return null;
 
   return (
@@ -100,7 +102,7 @@ function DependencyBadge({ stepNumbers }: { stepNumbers: number[] }) {
       )}
     >
       <ArrowRight className="w-2.5 h-2.5" />
-      after {stepNumbers.join(", ")}
+      {t("after", { steps: stepNumbers.join(", ") })}
     </span>
   );
 }
@@ -114,6 +116,7 @@ export function TaskPlanPanel({
   className,
   defaultExpanded = true,
 }: TaskPlanPanelProps) {
+  const t = useTranslations("taskPlan");
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
     new Set(["steps"])
@@ -162,7 +165,7 @@ export function TaskPlanPanel({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-foreground">
-              Execution Plan
+              {t("executionPlan")}
             </span>
             <span
               className={cn(
@@ -174,7 +177,7 @@ export function TaskPlanPanel({
               <span
                 className={cn("w-1.5 h-1.5 rounded-full", complexityConfig.dot)}
               />
-              {complexityConfig.label}
+              {t(complexityConfig.labelKey)}
             </span>
           </div>
           <p className="text-xs text-muted-foreground mt-0.5 truncate">
@@ -191,7 +194,7 @@ export function TaskPlanPanel({
           )}
         >
           <span>{plan.steps.length}</span>
-          <span className="text-muted-foreground/60">steps</span>
+          <span className="text-muted-foreground/60">{t("stepsCount")}</span>
         </div>
 
         {/* Expand chevron */}
@@ -218,7 +221,7 @@ export function TaskPlanPanel({
                   expandedSections.has("steps") && "rotate-90"
                 )}
               />
-              Steps
+              {t("steps")}
             </button>
 
             {expandedSections.has("steps") && (
@@ -266,7 +269,7 @@ export function TaskPlanPanel({
                                 "w-1.5 h-1.5 rounded-full",
                                 complexityDot
                               )}
-                              title={`${step.estimated_complexity} complexity`}
+                              title={t("stepComplexity", { complexity: t(`complexity.${step.estimated_complexity}`) })}
                             />
                           </div>
                         </div>
@@ -292,7 +295,7 @@ export function TaskPlanPanel({
                   )}
                 />
                 <Target className="w-3 h-3" />
-                Success Criteria
+                {t("successCriteria")}
               </button>
 
               {expandedSections.has("criteria") && (
@@ -328,7 +331,7 @@ export function TaskPlanPanel({
                   )}
                 />
                 <AlertTriangle className="w-3 h-3" />
-                Potential Challenges
+                {t("potentialChallenges")}
               </button>
 
               {expandedSections.has("challenges") && (
@@ -360,7 +363,7 @@ export function TaskPlanPanel({
               <div className="flex items-center gap-2 mb-2">
                 <HelpCircle className="w-4 h-4 text-accent-cyan" />
                 <span className="text-xs font-semibold text-accent-cyan">
-                  Questions to Clarify
+                  {t("questionsToClarify")}
                 </span>
               </div>
               <div className="space-y-1.5 ml-6">

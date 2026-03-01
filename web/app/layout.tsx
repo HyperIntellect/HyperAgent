@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
+import { DM_Sans, JetBrains_Mono } from "next/font/google";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages, getTranslations } from "next-intl/server";
 import { SessionProvider } from "@/components/providers/session-provider";
@@ -8,11 +8,11 @@ import { AuthGuard } from "@/components/auth/auth-guard";
 import "./globals.css";
 
 // Load fonts with next/font for better performance (eliminates render-blocking request)
-const plusJakartaSans = Plus_Jakarta_Sans({
+const dmSans = DM_Sans({
     subsets: ["latin"],
-    weight: ["400", "500", "600", "700", "800"],
+    weight: ["400", "500", "600", "700"],
     display: "swap",
-    variable: "--font-plus-jakarta-sans",
+    variable: "--font-dm-sans",
 });
 
 
@@ -51,7 +51,7 @@ export default async function RootLayout({
     const messages = await getMessages();
 
     return (
-        <html lang={locale} suppressHydrationWarning className={`${plusJakartaSans.variable} ${jetbrainsMono.variable}`}>
+        <html lang={locale} suppressHydrationWarning className={`${dmSans.variable} ${jetbrainsMono.variable}`}>
             <head>
                 <script
                     dangerouslySetInnerHTML={{

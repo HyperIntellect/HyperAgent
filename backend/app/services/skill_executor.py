@@ -116,7 +116,6 @@ class SkillExecutor:
 
             # Execute with timeout using astream to capture intermediate events
             final_state = None
-            emitted_event_count = 0  # Track how many events we've emitted
             try:
                 async with asyncio.timeout(skill.metadata.max_execution_time_seconds):
                     # Use astream to get intermediate states and emit pending events
@@ -134,8 +133,11 @@ class SkillExecutor:
                             )
 
                             # Relay custom pending_events (AppBuilder etc.)
-                            pending_events = node_state.get("pending_events", [])
-                            new_events = pending_events[emitted_event_count:]
+                            # With the Annotated[..., add] reducer, graph.astream()
+                            # yields per-node output (pre-reducer), so each node's
+                            # pending_events contains only its own events — no
+                            # deduplication needed.
+                            new_events = node_state.get("pending_events", [])
                             if new_events:
                                 event_types = [
                                     e.get("type") for e in new_events if isinstance(e, dict)
@@ -149,7 +151,6 @@ class SkillExecutor:
                                 )
                             for event in new_events:
                                 yield event
-                            emitted_event_count = len(pending_events)
 
                             # Update final state
                             if final_state is None:

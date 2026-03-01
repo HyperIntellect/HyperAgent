@@ -54,6 +54,7 @@ class SupervisorState(TypedDict, total=False):
     selected_agent: str  # The agent type selected by router
     routing_reason: str  # Explanation for routing decision
     routing_confidence: float  # Confidence score from router (0.0 to 1.0)
+    parallel_eligible: bool  # Whether query is eligible for parallel execution
 
     # Handoff support (multi-agent collaboration)
     active_agent: str | None  # Currently active agent (for handoff tracking)
@@ -90,6 +91,7 @@ class SupervisorState(TypedDict, total=False):
 
     # Metadata
     task_id: str | None
+    run_id: str | None  # Durable run ledger id
     user_id: str | None
     attachment_ids: list[str]  # IDs of attached files for tool access
     image_attachments: list[
@@ -99,6 +101,8 @@ class SupervisorState(TypedDict, total=False):
     model: str | None
     tier: ModelTier | None  # User-specified tier override
     locale: str  # User's preferred language (e.g., 'en', 'zh-CN')
+    budget: dict[str, Any] | None  # Optional budget constraints for this run
+    execution_mode: str | None  # auto|guided|strict
 
 
 class TaskState(SupervisorState, total=False):
@@ -128,9 +132,21 @@ class TaskState(SupervisorState, total=False):
     # the global plan in the model's recent attention window across many iterations.
     active_todo: str | None  # Current plan/todo state for attention manipulation
 
+    # KV-cache optimization: hash of the stable prefix (system prompt + tool schemas)
+    # so we can detect unintended prefix changes between iterations.
+    prefix_hash: str | None  # MD5 hash of the stable prefix content
+
+    # Anti-repetition: hashes of recent tool calls to detect stuck loops.
+    # Each hash = md5(tool_name + sorted(args)). Max 5 recent entries.
+    # Uses override reducer so the node always sets the full list.
+    last_tool_calls_hash: Annotated[list[str], _override_reducer]
+
     # Enhanced verification
     verification_results: list[dict]  # Detailed per-step verification outcomes
     verified_steps: list[int]  # Step numbers that have been verified
+    verification_status: str | None  # Latest verifier status: passed|partial|failed|error
+    verification_attempts: int  # Number of adaptation attempts after failed verification
+    verification_retry_hint: str | None  # Suggested retry/adaptation guidance
 
 
 class ResearchState(SupervisorState, total=False):
@@ -172,6 +188,7 @@ class RouterOutput(TypedDict, total=False):
     selected_agent: str
     routing_reason: str
     routing_confidence: float
+    parallel_eligible: bool
     active_agent: str
     delegated_task: str | None
     handoff_context: str | None

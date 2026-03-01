@@ -113,6 +113,19 @@ class BaseCodeExecutor(ABC):
         """
         ...
 
+    def set_runtime(self, runtime: SandboxRuntime) -> None:
+        """Set an external SandboxRuntime for this executor.
+
+        Used by the unified sandbox manager to share a single runtime
+        across code execution and app development.
+
+        Args:
+            runtime: Pre-existing SandboxRuntime to use
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support set_runtime()"
+        )
+
     @property
     @abstractmethod
     def sandbox_id(self) -> str | None:

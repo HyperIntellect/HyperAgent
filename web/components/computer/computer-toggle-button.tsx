@@ -51,7 +51,7 @@ export function ComputerToggleButton({ className }: ComputerToggleButtonProps) {
 
             {/* Unread activity count badge */}
             {!isOpen && unreadActivityCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-medium leading-none">
+                <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-medium leading-none">
                     {unreadActivityCount > 99 ? "99+" : unreadActivityCount}
                 </span>
             )}
@@ -62,7 +62,7 @@ export function ComputerToggleButton({ className }: ComputerToggleButtonProps) {
                     className={cn(
                         "absolute top-1 right-1 w-2 h-2 rounded-full",
                         isStreaming
-                            ? "bg-green-500 animate-pulse"
+                            ? "bg-primary animate-pulse"
                             : "bg-muted-foreground/50"
                     )}
                 />
