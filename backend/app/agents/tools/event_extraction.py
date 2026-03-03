@@ -184,6 +184,60 @@ def extract_app_builder_events(
         logger.warning("app_builder_event_extraction_failed", error=str(e))
 
 
+def extract_shell_and_code_events(
+    tool_name: str,
+    result_str: str,
+    event_list: list[dict],
+) -> None:
+    """Extract terminal and workspace events from shell_exec and execute_code results.
+
+    Args:
+        tool_name: Name of the tool
+        result_str: JSON result string from the tool
+        event_list: Event list to append to (mutated in-place)
+    """
+    if tool_name not in ("shell_exec", "execute_code") or not result_str:
+        return
+
+    try:
+        parsed = json.loads(result_str)
+        if not isinstance(parsed, dict):
+            return
+
+        # Extract terminal events
+        terminal_events = parsed.get("terminal_events") or []
+        for evt in terminal_events:
+            if isinstance(evt, dict) and evt.get("type") in (
+                "terminal_command",
+                "terminal_output",
+                "terminal_error",
+                "terminal_complete",
+            ):
+                event_list.append(evt)
+
+        if terminal_events:
+            logger.info(
+                "shell_code_terminal_events_extracted",
+                tool_name=tool_name,
+                event_count=len(terminal_events),
+            )
+
+        # Extract workspace events
+        workspace_events = parsed.get("workspace_events") or []
+        for ws_evt in workspace_events:
+            if isinstance(ws_evt, dict) and ws_evt.get("type") == "workspace_update":
+                event_list.append(ws_evt)
+
+        if workspace_events:
+            logger.info(
+                "shell_code_workspace_events_extracted",
+                tool_name=tool_name,
+                event_count=len(workspace_events),
+            )
+    except Exception as e:
+        logger.warning("shell_code_event_extraction_failed", tool_name=tool_name, error=str(e))
+
+
 def extract_slide_events(
     tool_name: str,
     result_str: str,

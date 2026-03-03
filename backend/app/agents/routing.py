@@ -18,20 +18,17 @@ logger = get_logger(__name__)
 ROUTER_PROMPT = """You are a routing assistant that determines which specialized agent should handle a user query.
 
 Available agents:
-1. task - Primary agent for most tasks: conversation, Q&A, image generation, writing, coding, app building, data analysis, and general requests. Has powerful skills for specialized tasks.
-2. research - ONLY for deep, comprehensive research requiring extensive web search, multi-source analysis, and detailed reports
+1. task - The universal agent for ALL tasks: conversation, Q&A, image generation, writing, coding, app building, data analysis, deep research, and general requests. Has powerful skills for specialized tasks.
 
-IMPORTANT: Route almost everything to TASK agent. It has skills for:
+Route ALL queries to TASK agent. It has skills for:
 - Image generation (image_generation skill)
 - Code generation (code_generation skill)
 - Code execution (execute_code tool)
 - App building (app_builder skill)
 - Data analysis (data_analysis skill) - CSV/Excel/JSON analysis, statistics, visualization, ML
+- Deep research (deep_research skill) - comprehensive multi-source analysis and reports
 - Web search (web_search tool)
 - Quick research (web_research skill)
-
-Route to RESEARCH agent ONLY when:
-- Comprehensive multi-step research with synthesis and detailed analysis
 
 Analyze the user's query and respond with a JSON object containing:
 - "agent": The agent name (task or research)
@@ -45,7 +42,7 @@ Query: "Hello, how are you?"
 {"agent": "task", "confidence": 0.95, "reason": "General conversation"}
 
 Query: "Research and write a comprehensive report on AI developments in 2024 with citations"
-{"agent": "research", "confidence": 0.95, "reason": "Deep research requiring multi-source analysis and detailed report"}
+{"agent": "task", "confidence": 0.95, "reason": "Deep research - task agent has deep_research skill"}
 
 Query: "What are the latest AI developments?"
 {"agent": "task", "confidence": 0.9, "reason": "Simple question - task agent can search and answer"}
@@ -81,7 +78,7 @@ Query: "Generate a picture of a cat"
 {"agent": "task", "confidence": 0.95, "reason": "Image generation - task agent has image_generation skill"}
 
 Query: "Create a detailed academic research paper on quantum computing"
-{"agent": "research", "confidence": 0.9, "reason": "Comprehensive research requiring detailed analysis"}"""
+{"agent": "task", "confidence": 0.9, "reason": "Deep research - task agent has deep_research skill"}"""
 
 ROUTER_SYSTEM_MESSAGE = SystemMessage(
     content=ROUTER_PROMPT,
@@ -108,13 +105,13 @@ ROUTING_CONFIDENCE_THRESHOLD = 0.5
 AGENT_NAME_MAP = {
     # Canonical agent types
     "task": AgentType.TASK,
-    "research": AgentType.RESEARCH,
+    "research": AgentType.TASK,  # Research is now a skill invoked by task agent
     "data": AgentType.TASK,  # Data mode routes to task agent with data_analysis skill
     "app": AgentType.TASK,  # App mode routes to task agent with app_builder skill
     "image": AgentType.TASK,  # Image mode routes to task agent with image_generation skill
     "slide": AgentType.TASK,  # Slide mode routes to task agent with slide_generation skill
     "TASK": AgentType.TASK,
-    "RESEARCH": AgentType.RESEARCH,
+    "RESEARCH": AgentType.TASK,  # Research is now a skill invoked by task agent
     "DATA": AgentType.TASK,
     "APP": AgentType.TASK,
     "IMAGE": AgentType.TASK,
@@ -259,7 +256,7 @@ async def route_query(state: SupervisorState) -> dict:
 
     # Use LLM-based routing
     provider = state.get("provider")
-    llm = llm_service.get_llm_for_tier(ModelTier.FLASH, provider=provider)
+    llm = llm_service.get_llm_for_tier(ModelTier.LITE, provider=provider)
 
     try:
         response = await llm.ainvoke(

@@ -77,7 +77,7 @@ class SkillExecutor:
         # Emit start event
         yield events.stage(
             name=f"skill_{skill_id}",
-            description=f"Executing {skill.metadata.name}",
+            description=f"Executing {skill_id}",
             status="running",
         )
 
@@ -105,6 +105,7 @@ class SkillExecutor:
                 "user_id": user_id,
                 "task_id": task_id,
                 "invocation_depth": invocation_depth,
+                "tier": params.get("tier"),
             }
 
             # Add pending_events for skills that emit stage events during execution
@@ -125,19 +126,29 @@ class SkillExecutor:
                             if not isinstance(node_state, dict):
                                 continue
 
-                            # AUTO: emit stage:running for this node
-                            yield events.stage(
-                                name=f"skill_{skill_id}:{node_name}",
-                                description=f"Running {node_name}",
-                                status="running",
-                            )
-
                             # Relay custom pending_events (AppBuilder etc.)
                             # With the Annotated[..., add] reducer, graph.astream()
                             # yields per-node output (pre-reducer), so each node's
                             # pending_events contains only its own events — no
                             # deduplication needed.
                             new_events = node_state.get("pending_events", [])
+
+                            # Check if the node emits its own stage events.
+                            # If so, skip auto-generated stage events to avoid
+                            # duplicate entries in the progress panel.
+                            has_custom_stages = any(
+                                isinstance(e, dict) and e.get("type") == "stage"
+                                for e in new_events
+                            )
+
+                            if not has_custom_stages:
+                                # AUTO: emit stage:running for this node
+                                yield events.stage(
+                                    name=f"skill_{skill_id}:{node_name}",
+                                    description=f"Running {node_name}",
+                                    status="running",
+                                )
+
                             if new_events:
                                 event_types = [
                                     e.get("type") for e in new_events if isinstance(e, dict)
@@ -157,20 +168,21 @@ class SkillExecutor:
                                 final_state = dict(initial_state)
                             final_state.update(node_state)
 
-                            # AUTO: emit stage:completed or stage:failed for this node
-                            node_error = node_state.get("error")
-                            if node_error:
-                                yield events.stage(
-                                    name=f"skill_{skill_id}:{node_name}",
-                                    description=f"Failed {node_name}: {str(node_error)[:100]}",
-                                    status="failed",
-                                )
-                            else:
-                                yield events.stage(
-                                    name=f"skill_{skill_id}:{node_name}",
-                                    description=f"Completed {node_name}",
-                                    status="completed",
-                                )
+                            if not has_custom_stages:
+                                # AUTO: emit stage:completed/failed for this node
+                                node_error = node_state.get("error")
+                                if node_error:
+                                    yield events.stage(
+                                        name=f"skill_{skill_id}:{node_name}",
+                                        description=f"Failed {node_name}: {str(node_error)[:100]}",
+                                        status="failed",
+                                    )
+                                else:
+                                    yield events.stage(
+                                        name=f"skill_{skill_id}:{node_name}",
+                                        description=f"Completed {node_name}",
+                                        status="completed",
+                                    )
 
             except TimeoutError:
                 raise Exception(
@@ -206,7 +218,7 @@ class SkillExecutor:
             # Emit completion stage
             yield events.stage(
                 name=f"skill_{skill_id}",
-                description=f"Completed {skill.metadata.name}",
+                description=f"Completed {skill_id}",
                 status="completed",
             )
 

@@ -33,20 +33,20 @@
     --warning: 38 92% 50%;
     --info: 221 83% 53%;
 
-    /* Terminal colors (HSL) */
-    --terminal-bg: 220 13% 10%;
-    --terminal-fg: 220 9% 87%;
-    --terminal-prompt: 142 71% 45%;
-    --terminal-command: 221 83% 53%;
-    --terminal-error: 0 72% 51%;
-    --terminal-output: 220 9% 70%;
+    /* Terminal colors (HSL) — theme-adaptive: light bg in light mode */
+    --terminal-bg: 220 9% 98%;
+    --terminal-fg: 220 13% 18%;
+    --terminal-prompt: 142 71% 35%;
+    --terminal-command: 220 13% 18%;
+    --terminal-error: 0 72% 48%;
+    --terminal-output: 220 9% 30%;
     /* Terminal tool/skill colors */
-    --terminal-tool: 187 100% 42%;
-    --terminal-skill: 270 60% 65%;
-    --terminal-browser: 30 100% 50%;
+    --terminal-tool: 187 100% 32%;
+    --terminal-skill: 270 60% 50%;
+    --terminal-browser: 30 100% 40%;
     /* Terminal internal structure */
-    --terminal-border: 220 13% 18%;
-    --terminal-input-bg: 220 13% 12%;
+    --terminal-border: 220 9% 88%;
+    --terminal-input-bg: 220 9% 96%;
 
     /* Chart colors (OKLCH) */
     --chart-1: 0.56 0.13 43.00;
@@ -66,14 +66,14 @@
     --sidebar-ring: 0.609 0.113 221;
 
     /* Shadows */
-    --shadow-2xs: 0 1px 2px 0 rgba(0,0,0,0.03);
-    --shadow-xs: 0 1px 3px 0 rgba(0,0,0,0.04);
-    --shadow-sm: 0 1px 3px 0 rgba(0,0,0,0.06), 0 1px 2px -1px rgba(0,0,0,0.06);
-    --shadow: 0 2px 6px -1px rgba(0,0,0,0.08), 0 1px 3px -1px rgba(0,0,0,0.06);
-    --shadow-md: 0 4px 8px -2px rgba(0,0,0,0.08), 0 2px 4px -2px rgba(0,0,0,0.04);
-    --shadow-lg: 0 8px 16px -4px rgba(0,0,0,0.08), 0 4px 6px -2px rgba(0,0,0,0.03);
-    --shadow-xl: 0 16px 32px -8px rgba(0,0,0,0.10), 0 8px 16px -4px rgba(0,0,0,0.04);
-    --shadow-2xl: 0 24px 48px -12px rgba(0,0,0,0.18);
+    --shadow-2xs: 0 1px 2px 0 rgba(0,0,0,0.02);
+    --shadow-xs: 0 1px 3px 0 rgba(0,0,0,0.03);
+    --shadow-sm: 0 1px 3px 0 rgba(0,0,0,0.04), 0 1px 2px -1px rgba(0,0,0,0.04);
+    --shadow: 0 2px 6px -1px rgba(0,0,0,0.06), 0 1px 3px -1px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 8px -2px rgba(0,0,0,0.06), 0 2px 4px -2px rgba(0,0,0,0.03);
+    --shadow-lg: 0 8px 16px -4px rgba(0,0,0,0.06), 0 4px 6px -2px rgba(0,0,0,0.02);
+    --shadow-xl: 0 16px 32px -8px rgba(0,0,0,0.08), 0 8px 16px -4px rgba(0,0,0,0.03);
+    --shadow-2xl: 0 24px 48px -12px rgba(0,0,0,0.14);
     --tracking-normal: 0em;
   }
 
@@ -107,19 +107,19 @@
     --info: 221 83% 58%;
 
     /* Terminal colors (HSL, dark mode) */
-    --terminal-bg: 220 13% 6%;
-    --terminal-fg: 220 9% 90%;
+    --terminal-bg: 220 13% 12%;
+    --terminal-fg: 220 9% 88%;
     --terminal-prompt: 142 71% 50%;
-    --terminal-command: 221 83% 58%;
+    --terminal-command: 220 9% 88%;
     --terminal-error: 0 72% 55%;
-    --terminal-output: 220 9% 75%;
+    --terminal-output: 220 9% 68%;
     /* Terminal tool/skill colors (dark mode) */
     --terminal-tool: 187 100% 50%;
     --terminal-skill: 270 60% 70%;
     --terminal-browser: 30 100% 55%;
     /* Terminal internal structure (dark mode) */
-    --terminal-border: 220 13% 14%;
-    --terminal-input-bg: 220 13% 8%;
+    --terminal-border: 220 13% 22%;
+    --terminal-input-bg: 220 13% 10%;
 
     /* Chart colors (OKLCH, dark mode) */
     --chart-1: 0.56 0.13 43.00;
@@ -244,7 +244,7 @@
 /* Simple color transitions only */
 * {
   transition-property: background-color, border-color, color, opacity;
-  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
   transition-duration: 150ms;
 }
 
@@ -265,7 +265,8 @@ code:not(pre code) {
 /* Prose styling - optimized for readability */
 .prose {
   @apply text-foreground text-lg;
-  line-height: 1.7;
+  line-height: 1.75;
+  letter-spacing: -0.01em;
 }
 
 .prose p {
@@ -660,55 +661,6 @@ button {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* Terminal styling */
-.bg-terminal-bg {
-  background-color: hsl(var(--terminal-bg));
-}
-
-.text-terminal-fg {
-  color: hsl(var(--terminal-fg));
-}
-
-.text-terminal-prompt {
-  color: hsl(var(--terminal-prompt));
-}
-
-.text-terminal-command {
-  color: hsl(var(--terminal-command));
-}
-
-.text-terminal-error {
-  color: hsl(var(--terminal-error));
-}
-
-.text-terminal-output {
-  color: hsl(var(--terminal-output));
-}
-
-.text-terminal-tool {
-  color: hsl(var(--terminal-tool));
-}
-
-.text-terminal-skill {
-  color: hsl(var(--terminal-skill));
-}
-
-.text-terminal-browser {
-  color: hsl(var(--terminal-browser));
-}
-
-.bg-terminal-border {
-  background-color: hsl(var(--terminal-border));
-}
-
-.border-terminal-border {
-  border-color: hsl(var(--terminal-border));
-}
-
-.bg-terminal-input-bg {
-  background-color: hsl(var(--terminal-input-bg));
 }
 
 /* Terminal cursor blink animation */

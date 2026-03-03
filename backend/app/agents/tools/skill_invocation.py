@@ -32,8 +32,16 @@ class InvokeSkillInput(BaseModel):
     skill_id: str = Field(description="The ID of the skill to invoke (e.g., 'web_research')")
     params: dict[str, Any] = Field(description="Input parameters required by the skill")
     # Context fields (injected by agent, not provided by LLM)
-    user_id: str | None = Field(default=None, exclude=True)
-    task_id: str | None = Field(default=None, exclude=True)
+    user_id: str | None = Field(
+        default=None,
+        description="User ID for session management (internal use only)",
+        json_schema_extra={"exclude": True},
+    )
+    task_id: str | None = Field(
+        default=None,
+        description="Task ID for session management (internal use only)",
+        json_schema_extra={"exclude": True},
+    )
 
 
 @tool(args_schema=InvokeSkillInput)
@@ -59,10 +67,13 @@ async def invoke_skill(
     Returns:
         JSON string with skill execution results
     """
-    logger.debug(
+    logger.info(
         "invoke_skill_tool_called",
         skill_id=skill_id,
-        params=params,
+        params_keys=list(params.keys()) if params else [],
+        user_id=user_id,
+        task_id=task_id,
+        user_id_is_none=user_id is None,
     )
 
     # Get skill from registry (auto-promotes to Level 2 if needed)

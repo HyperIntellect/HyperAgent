@@ -9,6 +9,7 @@ const BATCH_SIZE = 20; // Additional items to render on scroll
 import {
   MessageCircle,
   Search,
+  BookOpenText,
   Trash2,
   Loader2,
   CheckCircle2,
@@ -33,23 +34,58 @@ export type RecentItem =
 // Filter types
 type FilterType = "all" | ConversationType;
 
-const CONVERSATION_TYPE_ICONS: Record<ConversationType, React.ReactNode> = {
-  task: <MessageCircle className="w-4 h-4" />,
-  research: <Search className="w-4 h-4" />,
-  data: <BarChart3 className="w-4 h-4" />,
-  app: <AppWindow className="w-4 h-4" />,
-  image: <ImageIcon className="w-4 h-4" />,
-  slide: <Presentation className="w-4 h-4" />,
+// Per-type icon and color for sidebar items
+const CONVERSATION_TYPE_CONFIG: Record<ConversationType, {
+  icon: React.ReactNode;
+  filterIcon: React.ReactNode;
+  color: string;
+}> = {
+  task: {
+    icon: <MessageCircle className="w-4 h-4" />,
+    filterIcon: <MessageCircle className="w-3.5 h-3.5" />,
+    color: "text-muted-foreground",
+  },
+  research: {
+    icon: <BookOpenText className="w-4 h-4" />,
+    filterIcon: <BookOpenText className="w-3.5 h-3.5" />,
+    color: "text-indigo-500 dark:text-indigo-400",
+  },
+  data: {
+    icon: <BarChart3 className="w-4 h-4" />,
+    filterIcon: <BarChart3 className="w-3.5 h-3.5" />,
+    color: "text-amber-500 dark:text-amber-400",
+  },
+  app: {
+    icon: <AppWindow className="w-4 h-4" />,
+    filterIcon: <AppWindow className="w-3.5 h-3.5" />,
+    color: "text-rose-500 dark:text-rose-400",
+  },
+  image: {
+    icon: <ImageIcon className="w-4 h-4" />,
+    filterIcon: <ImageIcon className="w-3.5 h-3.5" />,
+    color: "text-purple-500 dark:text-purple-400",
+  },
+  slide: {
+    icon: <Presentation className="w-4 h-4" />,
+    filterIcon: <Presentation className="w-3.5 h-3.5" />,
+    color: "text-teal-500 dark:text-teal-400",
+  },
+};
+
+// Legacy task items (from old research worker) use Search icon
+const TASK_ITEM_CONFIG = {
+  icon: <Search className="w-4 h-4" />,
+  color: "text-blue-500 dark:text-blue-400",
 };
 
 const FILTER_ICONS: Record<FilterType, React.ReactNode> = {
   all: <ListFilter className="w-3.5 h-3.5" />,
-  task: <MessageCircle className="w-3.5 h-3.5" />,
-  research: <Search className="w-3.5 h-3.5" />,
-  data: <BarChart3 className="w-3.5 h-3.5" />,
-  app: <AppWindow className="w-3.5 h-3.5" />,
-  image: <ImageIcon className="w-3.5 h-3.5" />,
-  slide: <Presentation className="w-3.5 h-3.5" />,
+  task: CONVERSATION_TYPE_CONFIG.task.filterIcon,
+  research: CONVERSATION_TYPE_CONFIG.research.filterIcon,
+  data: CONVERSATION_TYPE_CONFIG.data.filterIcon,
+  app: CONVERSATION_TYPE_CONFIG.app.filterIcon,
+  image: CONVERSATION_TYPE_CONFIG.image.filterIcon,
+  slide: CONVERSATION_TYPE_CONFIG.slide.filterIcon,
 };
 
 // Group items by time period
@@ -403,10 +439,12 @@ function RecentItemRow({
   const title = isTask ? item.data.query : item.data.title;
   const taskStatus = isTask ? item.data.status : null;
 
-  // Get type icon (always show type, not status)
-  const typeIcon = isTask
-    ? <Search className="w-4 h-4" />
-    : CONVERSATION_TYPE_ICONS[conversationType || "task"];
+  // Get type icon and color
+  const config = isTask
+    ? TASK_ITEM_CONFIG
+    : CONVERSATION_TYPE_CONFIG[conversationType || "task"];
+  const typeIcon = config.icon;
+  const iconColor = config.color;
 
   // Get status indicator for tasks
   const getStatusIndicator = () => {
@@ -440,7 +478,7 @@ function RecentItemRow({
       )}>
         <span className={cn(
           "transition-colors",
-          isActive ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"
+          isActive ? "text-foreground" : iconColor
         )}>
           {typeIcon}
         </span>

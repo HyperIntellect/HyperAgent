@@ -95,7 +95,7 @@ class TestConsecutiveErrorTracking:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ):
             result = await act_node(state)
 
@@ -140,7 +140,7 @@ class TestConsecutiveErrorTracking:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ):
             result = await act_node(state)
 
@@ -185,7 +185,7 @@ class TestConsecutiveErrorTracking:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ):
             result = await act_node(state)
 
@@ -237,7 +237,7 @@ class TestConsecutiveErrorTracking:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ):
             result = await act_node(state)
 
@@ -296,7 +296,7 @@ class TestConsecutiveErrorTracking:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ):
             result = await act_node(state)
 
@@ -350,7 +350,7 @@ class TestVerificationRouting:
             "tool_iterations": 0,
         }
 
-        with patch("app.agents.subagents.task._get_cached_react_config") as mock_config:
+        with patch("app.agents.subagents.task._get_react_config_for_state") as mock_config:
             mock_config.return_value = MagicMock(max_iterations=10)
             result = should_continue(state)
 
@@ -370,7 +370,7 @@ class TestVerificationRouting:
             "tool_iterations": 10,
         }
 
-        with patch("app.agents.subagents.task._get_cached_react_config") as mock_config:
+        with patch("app.agents.subagents.task._get_react_config_for_state") as mock_config:
             mock_config.return_value = MagicMock(max_iterations=10)
             result = should_continue(state)
 
@@ -388,7 +388,7 @@ class TestVerificationRouting:
             "tool_iterations": 10,
         }
 
-        with patch("app.agents.subagents.task._get_cached_react_config") as mock_config:
+        with patch("app.agents.subagents.task._get_react_config_for_state") as mock_config:
             mock_config.return_value = MagicMock(max_iterations=10)
             result = should_continue(state)
 
@@ -530,8 +530,8 @@ class TestVerificationAdaptationRouting:
         assert should_adapt_or_finalize(state) == "finalize"
 
     @pytest.mark.asyncio
-    async def test_uses_flash_tier(self, sample_plan_steps):
-        """verify_node should use FLASH tier LLM for cost efficiency."""
+    async def test_uses_lite_tier(self, sample_plan_steps):
+        """verify_node should use LITE tier LLM for cost efficiency."""
         from app.models.schemas import ModelTier
 
         state: TaskState = {
@@ -553,9 +553,9 @@ class TestVerificationAdaptationRouting:
             mock_service.get_llm_for_tier = MagicMock(return_value=mock_llm)
             await verify_node(state)
 
-        # Verify FLASH tier was requested
+        # Verify LITE tier was requested
         mock_service.get_llm_for_tier.assert_called_once_with(
-            ModelTier.FLASH, provider="anthropic"
+            ModelTier.LITE, provider="anthropic"
         )
 
 

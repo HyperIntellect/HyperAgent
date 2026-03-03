@@ -12,11 +12,13 @@ import {
     Code,
     Globe,
     FileText,
+    Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { InterruptEvent, InterruptResponse, InterruptOption } from "@/lib/types";
+import { getTranslatedSkillName } from "@/lib/utils/skill-i18n";
 
 interface InterruptDialogProps {
     interrupt: InterruptEvent;
@@ -36,7 +38,24 @@ function getToolIcon(toolName: string) {
     if (lowerName.includes("file") || lowerName.includes("sandbox")) {
         return FileText;
     }
+    if (lowerName === "invoke_skill" || lowerName.startsWith("invoke_skill:")) {
+        return Sparkles;
+    }
     return AlertTriangle;
+}
+
+// Get display name for tool, with translated skill names
+function getToolDisplayName(
+    toolName: string,
+    args: Record<string, unknown>,
+    tSkills: (key: string) => string,
+): string {
+    const lowerName = toolName.toLowerCase();
+    if (lowerName === "invoke_skill" || lowerName.startsWith("invoke_skill:")) {
+        const skillId = (args.skill_id as string) || toolName.split(":")[1] || "unknown";
+        return getTranslatedSkillName(skillId, skillId, tSkills);
+    }
+    return toolName.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 // Format tool arguments for display
@@ -95,6 +114,49 @@ function CountdownTimer({ seconds, onExpire }: { seconds: number; onExpire: () =
     );
 }
 
+// Generate localized approval message for tool
+function useDialogApprovalMessage(interrupt: InterruptEvent): string {
+    const t = useTranslations("hitl");
+    const tSkills = useTranslations("skills");
+
+    if (interrupt.interrupt_type !== "approval" || !interrupt.tool_info) {
+        return interrupt.message;
+    }
+
+    const { name, args } = interrupt.tool_info;
+    const lowerName = name.toLowerCase();
+
+    if (lowerName.includes("browser_navigate") || lowerName === "computer_tool") {
+        const url = (args.url as string) || (args.action as Record<string, string>)?.text || "unknown";
+        return t("approvalBrowserNav", { url });
+    }
+    if (lowerName.includes("browser_click")) {
+        const target = (args.selector as string) || (args.text as string) || "element";
+        return t("approvalBrowserClick", { target });
+    }
+    if (lowerName.includes("browser_type")) {
+        const target = (args.selector as string) || (args.text as string) || "element";
+        return t("approvalBrowserType", { target });
+    }
+    if (["execute_code", "code_interpreter", "python_repl", "sandbox_execute"].includes(name)) {
+        return t("approvalCodeExecution");
+    }
+    if (["sandbox_file", "file_write", "file_delete", "file_str_replace"].includes(name)) {
+        const path = (args.path as string) || (args.filename as string) || "unknown";
+        if (name.includes("delete")) {
+            return t("approvalFileDelete", { path });
+        }
+        return t("approvalFileModify", { path });
+    }
+    if (lowerName === "invoke_skill" || lowerName.startsWith("invoke_skill:")) {
+        const skillId = (args.skill_id as string) || name.split(":")[1] || "unknown";
+        const skillName = getTranslatedSkillName(skillId, skillId, tSkills);
+        return t("approvalSkillInvocation", { skillName });
+    }
+
+    return t("approvalGenericTool", { toolName: name });
+}
+
 // Approval dialog content
 function ApprovalContent({
     interrupt,
@@ -104,8 +166,10 @@ function ApprovalContent({
     onRespond: (response: InterruptResponse) => void;
 }) {
     const t = useTranslations("hitl");
+    const tSkills = useTranslations("skills");
     const toolInfo = interrupt.tool_info;
     const ToolIcon = toolInfo ? getToolIcon(toolInfo.name) : AlertTriangle;
+    const approvalMessage = useDialogApprovalMessage(interrupt);
 
     return (
         <div className="space-y-4">
@@ -118,7 +182,7 @@ function ApprovalContent({
                         </div>
                         <div className="flex-1 min-w-0">
                             <h4 className="text-sm font-medium text-foreground">
-                                {toolInfo.name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                                {getToolDisplayName(toolInfo.name, toolInfo.args, tSkills)}
                             </h4>
                             <pre className="mt-2 text-xs text-muted-foreground whitespace-pre-wrap break-all font-mono bg-background/50 rounded p-2 max-h-32 overflow-auto">
                                 {formatToolArgs(toolInfo.args, t("noArguments"))}
@@ -130,7 +194,7 @@ function ApprovalContent({
 
             {/* Message */}
             <p className="text-sm text-foreground/80 whitespace-pre-wrap">
-                {interrupt.message}
+                {approvalMessage}
             </p>
 
             {/* Action buttons */}

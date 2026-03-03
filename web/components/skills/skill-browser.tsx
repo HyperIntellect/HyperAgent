@@ -122,7 +122,7 @@ export function SkillBrowser({ onSkillSelect }: SkillBrowserProps) {
     return (
       <div className="flex flex-col items-center justify-center py-24 gap-3">
         <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Loading skills...</p>
+        <p className="text-sm text-muted-foreground">{t("loadingSkills")}</p>
       </div>
     );
   }

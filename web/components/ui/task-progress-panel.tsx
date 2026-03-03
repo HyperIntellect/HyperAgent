@@ -37,7 +37,12 @@ const KNOWN_STAGES = [
     "browser_screenshot", "browser_scroll", "browser_key", "browser_computer",
     "computer", "context", "processing",
     // App builder stages
-    "scaffold", "server"
+    "scaffold", "server",
+    // Deep research skill LangGraph nodes
+    "init_config", "react_loop", "execute_tools",
+    // Agentic search skill stages + LangGraph node names
+    "classifying", "searching", "planning", "evaluating", "synthesizing",
+    "classify", "quick_search", "plan_search", "execute_search", "evaluate",
 ];
 
 /**
@@ -697,7 +702,7 @@ function SourcesSection({ sources }: { sources: Source[] }) {
                         {sources.length > 5 && (
                             <div className="pt-2 pl-6">
                                 <span className="text-[11px] text-muted-foreground/60 font-medium">
-                                    +{sources.length - 5} more sources
+                                    {tProgress("moreSources", { count: sources.length - 5 })}
                                 </span>
                             </div>
                         )}

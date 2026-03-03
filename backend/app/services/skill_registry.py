@@ -257,18 +257,22 @@ class SkillRegistry:
         try:
             # Import builtin skills
             from app.agents.skills.builtin import (
+                AgenticSearchSkill,
                 AppBuilderSkill,
                 CodeGenerationSkill,
                 DataAnalysisSkill,
+                DeepResearchSkill,
                 ImageGenerationSkill,
                 SlideGenerationSkill,
                 TaskPlanningSkill,
-                WebResearchSkill,
             )
 
             # Register each skill at Level 1 (metadata only)
+            # Note: WebResearchSkill is now an alias for AgenticSearchSkill
+            # (both share ID "web_research"), so we only register AgenticSearchSkill.
             for skill_class in [
-                WebResearchSkill,
+                AgenticSearchSkill,
+                DeepResearchSkill,
                 DataAnalysisSkill,
                 ImageGenerationSkill,
                 CodeGenerationSkill,

@@ -534,7 +534,7 @@ async def extract_memories_from_conversation(
     )
 
     try:
-        llm = llm_service.get_llm_for_tier(ModelTier.FLASH, provider=provider)
+        llm = llm_service.get_llm_for_tier(ModelTier.LITE, provider=provider)
         result = await llm.ainvoke([HumanMessage(content=extraction_prompt)])
         text = extract_text_from_content(result.content).strip()
 

@@ -7,9 +7,13 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { useTranslations } from "next-intl";
 import Image from "next/image";
-import { Copy, Check, RotateCcw, ImageIcon } from "lucide-react";
+import {
+    Copy, Check, RotateCcw, ImageIcon,
+    Search, BookOpenText, Code2, BarChart3, Presentation, AppWindow, ListChecks, Sparkles,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { usePreviewStore } from "@/lib/stores/preview-store";
+import { useComputerStore } from "@/lib/stores/computer-store";
+import { fileAttachmentToExternalEntry } from "@/lib/utils/streaming-helpers";
 import { TaskProgressPanel } from "@/components/ui/task-progress-panel";
 import { TaskPlanPanel, type TaskPlan } from "@/components/ui/task-plan-panel";
 import { InlineAppPreview } from "@/components/ui/app-preview-panel";
@@ -27,6 +31,7 @@ import type {
     Source,
 } from "@/lib/types";
 import { generatedImageToFileAttachment } from "@/lib/utils/streaming-helpers";
+import { getTranslatedSkillName } from "@/lib/utils/skill-i18n";
 import type { TimestampedEvent } from "@/lib/stores/agent-progress-store";
 
 // Metadata that can come from message (parsed or raw)
@@ -35,7 +40,20 @@ interface ParsedMetadata {
     tokens?: number;
     images?: GeneratedImage[];
     agentEvents?: AgentEvent[];
+    skill?: string;
 }
+
+// Skill icon lookup for user message badge
+const SKILL_BADGE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+    web_research: Search,
+    deep_research: BookOpenText,
+    code_generation: Code2,
+    data_analysis: BarChart3,
+    image_generation: ImageIcon,
+    slide_generation: Presentation,
+    app_builder: AppWindow,
+    task_planning: ListChecks,
+};
 
 // Memoized markdown plugin arrays at module level
 const REMARK_PLUGINS = [remarkGfm, remarkMath];
@@ -231,8 +249,9 @@ export const MessageBubble = memo(function MessageBubble({
 }: MessageBubbleProps): JSX.Element {
     const isUser = message.role === "user";
     const [copied, setCopied] = useState(false);
-    const openPreview = usePreviewStore((state) => state.openPreview);
+    const openFileInBrowser = useComputerStore((state) => state.openFileInBrowser);
     const t = useTranslations("chat");
+    const tSkills = useTranslations("skills");
 
     // Parse metadata and extract data
     const parsedMetadata = useMemo(
@@ -294,17 +313,24 @@ export const MessageBubble = memo(function MessageBubble({
     }
 
     function handleAttachmentClick(attachment: FileAttachment): void {
-        openPreview(attachment);
+        const entry = fileAttachmentToExternalEntry(attachment, "upload");
+        openFileInBrowser(entry);
     }
 
     if (isUser) {
+        const userSkillId = parsedMetadata?.skill;
+        const SkillBadgeIcon = userSkillId
+            ? SKILL_BADGE_ICONS[userSkillId] || Sparkles
+            : null;
+
         return (
-            <div className="group py-4 flex justify-end">
-                <div className="relative max-w-[90%] md:max-w-[75%] break-words">
+            <div className="group py-5 flex justify-end">
+                <div className="relative max-w-[85%] md:max-w-[70%] break-words">
                     <div
                         className={cn(
                             "relative px-4 py-3",
-                            "bg-primary/10 text-foreground",
+                            "bg-secondary text-foreground",
+                            "border border-border/50",
                             "rounded-2xl rounded-br-md"
                         )}
                     >
@@ -322,14 +348,22 @@ export const MessageBubble = memo(function MessageBubble({
                             </div>
                         )}
                     </div>
+                    {userSkillId && SkillBadgeIcon && (
+                        <div className="flex justify-end mt-1.5 mr-1">
+                            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/70">
+                                <SkillBadgeIcon className="w-3 h-3" />
+                                {getTranslatedSkillName(userSkillId, userSkillId, tSkills)}
+                            </span>
+                        </div>
+                    )}
                 </div>
             </div>
         );
     }
 
     return (
-        <div className="group py-4 flex justify-start">
-            <div className="w-full max-w-[90%] md:max-w-[75%] break-words">
+        <div className="group py-5 flex justify-start">
+            <div className="w-full max-w-[90%] md:max-w-[80%] break-words">
                 {/* Assistant header with icon and name */}
                 <AssistantHeader />
 
@@ -368,13 +402,19 @@ export const MessageBubble = memo(function MessageBubble({
                     {isStreaming && message.content && <StreamingCursor />}
                 </div>
 
-                {/* Clickable image thumbnails — open in preview sidebar */}
+                {/* Clickable image thumbnails — open in file browser */}
                 {imageAttachments.length > 0 && (
                     <div className="mt-4 flex flex-wrap gap-2">
                         {imageAttachments.map((file) => (
                             <button
                                 key={file.id}
-                                onClick={() => openPreview(file)}
+                                onClick={() => {
+                                    const entry = fileAttachmentToExternalEntry(file, "generated-image");
+                                    if (file.previewUrl?.startsWith("data:")) {
+                                        entry.base64Data = file.previewUrl;
+                                    }
+                                    openFileInBrowser(entry);
+                                }}
                                 className={cn(
                                     "group/img relative rounded-xl overflow-hidden",
                                     "border border-border/60 hover:border-primary/40",
@@ -510,7 +550,7 @@ export const MessageBubble = memo(function MessageBubble({
  */
 function AssistantHeader(): JSX.Element {
     return (
-        <div className="flex items-center gap-2 mb-3">
+        <div className="flex items-center gap-2 mb-4">
             <div className="w-5 h-5 flex items-center justify-center">
                 <Image
                     src="/images/logo-light.svg"
@@ -527,7 +567,7 @@ function AssistantHeader(): JSX.Element {
                     className="hidden dark:block"
                 />
             </div>
-            <span className="text-sm font-semibold text-foreground">
+            <span className="text-xs font-semibold text-foreground/80 tracking-wide uppercase">
                 HyperAgent
             </span>
         </div>
@@ -548,7 +588,7 @@ function MessageActions({ copied, onCopy, onRegenerate, events }: MessageActions
     const t = useTranslations("chat");
 
     return (
-        <div className="mt-3 flex items-center gap-1">
+        <div className="mt-4 pt-3 border-t border-border/20 flex items-center gap-1">
             <button
                 onClick={onCopy}
                 className={cn(

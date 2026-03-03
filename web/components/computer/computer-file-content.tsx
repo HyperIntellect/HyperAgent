@@ -363,7 +363,7 @@ export function ComputerFileContent({
                             size="icon"
                             className={cn("h-8 w-8", markdownMode === "raw" && "bg-primary/10 text-primary")}
                             onClick={() => setMarkdownMode("raw")}
-                            title="Raw"
+                            title={t("workspace.raw")}
                         >
                             <Code2 className="w-3.5 h-3.5" />
                         </Button>

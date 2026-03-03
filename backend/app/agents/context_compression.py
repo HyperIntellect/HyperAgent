@@ -397,7 +397,7 @@ class ContextCompressor:
         # Use FLASH tier for fast, cheap summarization
         try:
             llm = llm_service.get_llm_for_tier(
-                tier=ModelTier.FLASH,
+                tier=ModelTier.LITE,
                 provider=provider,
             )
 

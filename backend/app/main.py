@@ -11,6 +11,7 @@ from app.api import (
     files,
     health,
     hitl,
+    library,
     mcp,
     memory,
     projects,
@@ -204,6 +205,7 @@ app.include_router(tasks.router, prefix=settings.api_prefix, tags=["tasks"])
 app.include_router(conversations.router, prefix=settings.api_prefix, tags=["conversations"])
 app.include_router(projects.router, prefix=settings.api_prefix, tags=["projects"])
 app.include_router(files.router, prefix=settings.api_prefix, tags=["files"])
+app.include_router(library.router, prefix=settings.api_prefix, tags=["library"])
 app.include_router(skills.router, prefix=settings.api_prefix, tags=["skills"])
 app.include_router(providers.router, prefix=settings.api_prefix, tags=["providers"])
 app.include_router(hitl.router, prefix=settings.api_prefix, tags=["hitl"])

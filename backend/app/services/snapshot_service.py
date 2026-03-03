@@ -302,10 +302,10 @@ async def _record_snapshot(
 ) -> dict:
     """Record snapshot metadata in the database."""
     try:
-        from app.db.base import get_async_session
+        from app.db.base import get_db_session
         from app.db.models import SandboxSnapshot
 
-        async with get_async_session() as session:
+        async with get_db_session() as session:
             snapshot = SandboxSnapshot(
                 id=snapshot_id,
                 user_id=user_id,
@@ -353,10 +353,10 @@ async def _find_snapshot(
     try:
         from sqlalchemy import select
 
-        from app.db.base import get_async_session
+        from app.db.base import get_db_session
         from app.db.models import SandboxSnapshot
 
-        async with get_async_session() as session:
+        async with get_db_session() as session:
             if snapshot_id:
                 stmt = select(SandboxSnapshot).where(SandboxSnapshot.id == snapshot_id)
             else:

@@ -465,6 +465,58 @@ class ExecutionSandboxManager:
 
         return True
 
+    async def save_snapshot_for_session(
+        self,
+        user_id: str | None = None,
+        task_id: str | None = None,
+    ) -> bool:
+        """Eagerly save a snapshot for an active session without killing it.
+
+        Called after a supervisor run completes so the workspace state is
+        captured while the sandbox is still alive. The sandbox continues
+        to live for the normal timeout period.
+
+        Args:
+            user_id: User identifier
+            task_id: Task identifier
+
+        Returns:
+            True if snapshot was saved, False if session not found or save failed
+        """
+        session_key = self.make_session_key(user_id, task_id)
+
+        async with self._session_lock:
+            session = self._sessions.get(session_key)
+            if session is None:
+                return False
+
+        # Snapshot outside the lock to avoid holding it during I/O
+        try:
+            runtime = session.executor.get_runtime()
+            from app.services.snapshot_service import save_snapshot
+
+            result = await save_snapshot(
+                runtime=runtime,
+                user_id=user_id or "anonymous",
+                task_id=task_id or "default",
+                sandbox_type="execution",
+            )
+            if result:
+                logger.info(
+                    "execution_eager_snapshot_saved",
+                    session_key=session_key,
+                    snapshot_id=result.get("id"),
+                )
+                return True
+            return False
+        except Exception as e:
+            logger.debug(
+                "execution_eager_snapshot_failed",
+                session_key=session_key,
+                error=str(e),
+            )
+            return False
+
     async def cleanup_expired(self) -> int:
         """Clean up all expired sessions.
 

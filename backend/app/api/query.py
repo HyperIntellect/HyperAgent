@@ -7,7 +7,6 @@ from typing import Any, AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse
 
 from app.agents import agent_supervisor
 from app.ai.model_tiers import ModelTier, resolve_model
@@ -19,12 +18,9 @@ from app.api.query_helpers import (
     get_image_attachments,
     trim_duplicate_user_message,
 )
-from app.api.research_stream import (
-    research_stream_from_worker,
-)
+from app.config import settings
 from app.core.auth import CurrentUser, get_current_user
 from app.core.logging import get_logger
-from app.config import settings
 from app.db.base import get_db
 from app.guardrails.scanners.input_scanner import input_scanner
 from app.models.schemas import (
@@ -34,8 +30,6 @@ from app.models.schemas import (
 )
 from app.repository import deep_research_repository
 from app.services.run_ledger import run_ledger_service
-from app.sandbox import cleanup_sandboxes_for_task
-from app.workers.task_queue import task_queue
 
 logger = get_logger(__name__)
 
@@ -94,8 +88,8 @@ async def query(
                 provider=effective_provider,
             )
 
-        elif request.mode in (QueryMode.APP, QueryMode.DATA, QueryMode.IMAGE, QueryMode.SLIDE):
-            # Use agent supervisor for specialized modes
+        elif request.mode in (QueryMode.APP, QueryMode.DATA, QueryMode.IMAGE, QueryMode.SLIDE, QueryMode.RESEARCH):
+            # Use agent supervisor for specialized modes (including research)
             result = await agent_supervisor.invoke(
                 query=request.message,
                 mode=request.mode.value,
@@ -104,6 +98,8 @@ async def query(
                 system_prompt=system_prompt,
                 provider=request.provider,
                 model=request.model,
+                scenario=request.scenario,
+                depth=request.depth,
             )
 
             return UnifiedQueryResponse(
@@ -122,37 +118,6 @@ async def query(
             status_code=500, detail="An internal error occurred while processing your message."
         )
 
-    else:
-        # Handle research mode
-        if request.scenario is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Scenario is required for research mode. Choose from: academic, market, technical, news",
-            )
-
-        task_id = str(uuid.uuid4())
-
-        # Create task in database
-        await deep_research_repository.create_task(
-            db=db,
-            task_id=task_id,
-            query=request.message,
-            depth=request.depth.value,
-            scenario=request.scenario.value,
-            user_id=current_user.id,
-        )
-
-        logger.info("research_task_created", task_id=task_id, query=request.message[:50])
-
-        eff_p, eff_m = resolve_model(ModelTier.PRO, provider=request.provider)
-        return UnifiedQueryResponse(
-            id=str(uuid.uuid4()),
-            mode=QueryMode.RESEARCH,
-            task_id=task_id,
-            model=request.model or eff_m,
-            provider=eff_p,
-        )
-
 
 @router.post("/stream")
 async def stream_query(
@@ -166,6 +131,7 @@ async def stream_query(
         QueryMode.DATA,
         QueryMode.IMAGE,
         QueryMode.SLIDE,
+        QueryMode.RESEARCH,
     )
     if request.mode in _CHAT_MODES:
         # Phase 1: All DB work in a scoped session (released before streaming)
@@ -377,6 +343,9 @@ async def stream_query(
                     locale=request.locale,
                     budget=request.budget,
                     execution_mode=request.execution_mode,
+                    skills=request.skills,
+                    scenario=request.scenario,
+                    depth=request.depth,
                 ):
                     event_type = event["type"]
 
@@ -540,7 +509,25 @@ async def stream_query(
                         run = await run_ledger_service.get_run(run_id)
                         if run and run.get("status") == "running":
                             await run_ledger_service.mark_run_status(run_id, "completed")
-                    await cleanup_sandboxes_for_task(current_user.id, chat_task_id)
+                    # Sandbox cleanup is handled by timeout-based expiry (30 min idle),
+                    # NOT on SSE disconnect, to keep sandboxes alive across conversation messages.
+                    #
+                    # However, we eagerly save a snapshot now while the sandbox is still
+                    # alive, rather than waiting for the cleanup loop (which may run after
+                    # the E2B sandbox has already timed out).
+                    try:
+                        from app.sandbox import get_execution_sandbox_manager
+                        exec_mgr = get_execution_sandbox_manager()
+                        await exec_mgr.save_snapshot_for_session(
+                            user_id=current_user.id,
+                            task_id=chat_task_id,
+                        )
+                    except Exception as snap_err:
+                        logger.debug(
+                            "eager_snapshot_failed",
+                            task_id=chat_task_id,
+                            error=str(snap_err),
+                        )
 
                 try:
                     await asyncio.shield(_cleanup())
@@ -561,59 +548,8 @@ async def stream_query(
             },
         )
 
-    else:
-        # Stream research response via worker queue
-        if request.scenario is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Scenario is required for research mode. Choose from: academic, market, technical, news",
-            )
-
-        # Use frontend-provided task_id if available, otherwise generate new one
-        task_id = request.task_id or str(uuid.uuid4())
-
-        # All DB work in a scoped session
-        from app.db.base import async_session_maker
-
-        async with async_session_maker() as db:
-            # Create task in database
-            await deep_research_repository.create_task(
-                db=db,
-                task_id=task_id,
-                query=request.message,
-                depth=request.depth.value,
-                scenario=request.scenario.value,
-                user_id=current_user.id,
-            )
-
-            # Update status to queued before enqueueing
-            await deep_research_repository.update_task_status(db, task_id, "queued")
-            await db.commit()
-
-        # Enqueue to worker for background processing
-        job_id = await task_queue.enqueue_research_task(
-            task_id=task_id,
-            query=request.message,
-            depth=request.depth.value,
-            scenario=request.scenario.value,
-            user_id=current_user.id,
-            locale=request.locale,
-        )
-
-        # Update task with worker job ID
-        await deep_research_repository.update_task_worker_info(db, task_id, job_id, "api-enqueue")
-        await db.commit()
-
-        logger.info(
-            "research_stream_enqueued",
-            task_id=task_id,
-            job_id=job_id,
-            query=request.message[:50],
-            depth=request.depth.value if request.depth else None,
-            scenario=request.scenario.value if request.scenario else None,
-        )
-
-        return EventSourceResponse(research_stream_from_worker(task_id))
+    # Note: Research mode is now handled by _CHAT_MODES above
+    # (flows through supervisor → task agent → deep_research skill)
 
 
 @router.get("/status/{task_id}")

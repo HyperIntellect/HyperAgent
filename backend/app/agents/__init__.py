@@ -1,11 +1,16 @@
 """Multi-agent system with LangGraph-based orchestration.
 
-This module provides a supervisor-based multi-agent architecture where
-different specialized agents handle different types of tasks.
+This module provides a supervisor-based architecture where the task agent
+handles all types of queries, using skills for specialized capabilities.
 
-Available agents:
-- Task: General-purpose handler with skills (images, writing, code, data, etc.)
-- Research: Deep research with web search and analysis
+Available skills (invoked by task agent):
+- deep_research: Deep research with web search and analysis
+- data_analysis: Full data analysis with planning, code execution, summarization
+- image_generation: AI image generation
+- app_builder: Build web apps with live preview
+- slide_generation: Create PPTX presentations
+- code_generation: Generate code snippets
+- web_research: Focused web research with summarization
 
 Usage:
     from app.agents import agent_supervisor
@@ -16,14 +21,6 @@ Usage:
 
     # Non-streaming execution
     result = await agent_supervisor.invoke(query="Hello")
-
-    # With explicit mode
-    async for event in agent_supervisor.run(
-        query="Research AI trends",
-        mode="research",
-        depth=ResearchDepth.FAST,
-    ):
-        print(event)
 """
 
 # State definitions
@@ -38,7 +35,6 @@ from app.agents.state import (
 
 # Subagents
 from app.agents.subagents import (
-    research_subgraph,
     task_subgraph,
 )
 
@@ -64,5 +60,4 @@ __all__ = [
     "create_supervisor_graph",
     # Subagents
     "task_subgraph",
-    "research_subgraph",
 ]

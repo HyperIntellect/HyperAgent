@@ -57,6 +57,7 @@ class SkillState(TypedDict, total=False):
     user_id: str | None
     task_id: str | None
     invocation_depth: int
+    tier: str | None  # Quality tier for this execution (max/pro/lite)
 
 
 @dataclass

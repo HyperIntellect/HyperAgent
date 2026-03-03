@@ -5,6 +5,7 @@ session-based sandbox management for reuse across tool calls.
 """
 
 import json
+import time
 from typing import Literal
 
 from langchain_core.tools import tool
@@ -106,6 +107,21 @@ async def execute_code(
             "sandbox_id": None,
         })
 
+    # Display command for terminal events
+    lang_cmd_map = {
+        "python": "python3 script.py",
+        "javascript": "node script.js",
+        "typescript": "npx ts-node script.ts",
+        "bash": "bash script.sh",
+    }
+    display_cmd = lang_cmd_map.get(language, f"{language} script")
+
+    # Import shared helpers for terminal/workspace events
+    from app.agents.tools.shell_tools import (
+        _build_terminal_events,
+        _detect_workspace_changes,
+    )
+
     try:
         # Get or create sandbox session
         sandbox_manager = get_execution_sandbox_manager()
@@ -114,6 +130,9 @@ async def execute_code(
             task_id=task_id,
         )
         executor = session.executor
+        sandbox_id = (
+            session.sandbox_id or task_id or user_id or "exec-sandbox"
+        )
 
         # Install packages if requested
         if packages:
@@ -141,6 +160,7 @@ async def execute_code(
                     )
 
         # Execute the code
+        pre_exec_time = time.time()
         exec_result = await executor.execute_code(
             code=code,
             language=language,
@@ -152,14 +172,38 @@ async def execute_code(
         if capture_images:
             images = await executor.capture_images()
 
+        exec_stdout = exec_result.get("stdout") or ""
+        exec_stderr = exec_result.get("stderr") or ""
+        exit_code = exec_result.get("exit_code", 0)
+
+        # Build terminal events using shared helper
+        terminal_events = _build_terminal_events(
+            command=display_cmd,
+            stdout=exec_stdout,
+            stderr=exec_stderr if not exec_result["success"] else None,
+            exit_code=exit_code,
+        )
+
+        # Detect workspace changes
+        runtime = executor.get_runtime()
+        workspace_events = await _detect_workspace_changes(
+            runtime, pre_exec_time, sandbox_id,
+        )
+
         result = {
             "success": exec_result["success"],
             "stdout": exec_result["stdout"],
             "stderr": exec_result["stderr"],
             "exit_code": exec_result["exit_code"],
             "images": images,
-            "error": None if exec_result["success"] else exec_result.get("stderr", ""),
+            "error": (
+                None
+                if exec_result["success"]
+                else exec_result.get("stderr", "")
+            ),
             "sandbox_id": session.sandbox_id,
+            "terminal_events": terminal_events,
+            "workspace_events": workspace_events,
         }
 
         logger.info(
@@ -175,7 +219,14 @@ async def execute_code(
 
     except Exception as e:
         import traceback
-        logger.error("code_execution_error", error=str(e), traceback=traceback.format_exc())
+        logger.error(
+            "code_execution_error",
+            error=str(e),
+            traceback=traceback.format_exc(),
+        )
+        terminal_events = _build_terminal_events(
+            command=display_cmd, stderr=str(e), exit_code=1,
+        )
         return json.dumps({
             "success": False,
             "stdout": "",
@@ -184,6 +235,7 @@ async def execute_code(
             "images": [],
             "error": str(e),
             "sandbox_id": None,
+            "terminal_events": terminal_events,
         })
 
 

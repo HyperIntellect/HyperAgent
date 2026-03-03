@@ -3,14 +3,14 @@
 import React, { useEffect, useCallback, useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useComputerStore, COMPUTER_PANEL_MIN_WIDTH, COMPUTER_PANEL_MAX_WIDTH } from "@/lib/stores/computer-store";
-import type { ComputerMode, TimelineEventType, TimelineEvent } from "@/lib/stores/computer-store";
+import type { ComputerMode, TimelineEventType, TimelineEvent, TaskPlan } from "@/lib/stores/computer-store";
 import { useAgentProgressStore } from "@/lib/stores/agent-progress-store";
-import { ComputerTabBar } from "./computer-tab-bar";
+import { ComputerPanelHeader } from "./computer-panel-header";
 import { ComputerTerminalView } from "./computer-terminal-view";
 import { ComputerBrowserView } from "./computer-browser-view";
 import { ComputerFileView } from "./computer-file-view";
 import { ComputerErrorBoundary } from "./computer-error-boundary";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Check, Loader2, Circle } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 // Module-level empty array constant for referential stability
@@ -56,7 +56,7 @@ export function VirtualComputerPanel() {
     });
     const isLive = useComputerStore((state) => {
         const id = state.activeConversationId;
-        return id ? state.conversationStates[id]?.isLive ?? true : true;
+        return id ? state.conversationStates[id]?.isLive ?? false : false;
     });
     const currentStep = useComputerStore((state) => {
         const id = state.activeConversationId;
@@ -70,6 +70,10 @@ export function VirtualComputerPanel() {
         const id = state.activeConversationId;
         return id ? state.conversationStates[id]?.timeline ?? EMPTY_TIMELINE : EMPTY_TIMELINE;
     });
+    const taskPlan = useComputerStore((state) => {
+        const id = state.activeConversationId;
+        return id ? state.conversationStates[id]?.taskPlan ?? null : null;
+    }) as TaskPlan | null;
 
     // Compute visible data slices based on timeline position
     const visibleCounts = useMemo(() => {
@@ -111,13 +115,10 @@ export function VirtualComputerPanel() {
     const closePanel = useComputerStore.getState().closePanel;
     const setModeByUser = useComputerStore.getState().setModeByUser;
     const setPanelWidth = useComputerStore.getState().setPanelWidth;
-    const setBrowserStream = useComputerStore.getState().setBrowserStream;
     const setCurrentStep = useComputerStore.getState().setCurrentStep;
     const setIsLive = useComputerStore.getState().setIsLive;
     const nextStep = useComputerStore.getState().nextStep;
     const prevStep = useComputerStore.getState().prevStep;
-    const clearTerminal = useComputerStore.getState().clearTerminal;
-    const addTerminalLine = useComputerStore.getState().addTerminalLine;
     const setMode = useComputerStore.getState().setMode;
 
     const activeProgress = useAgentProgressStore((state) => state.activeProgress);
@@ -125,6 +126,7 @@ export function VirtualComputerPanel() {
 
     const [isResizing, setIsResizing] = useState(false);
     const [isDesktop, setIsDesktop] = useState(false);
+    const [stepsExpanded, setStepsExpanded] = useState(false);
 
     // Check if we're on desktop (lg breakpoint = 1024px)
     useEffect(() => {
@@ -135,14 +137,8 @@ export function VirtualComputerPanel() {
         return () => mq.removeEventListener("change", handler);
     }, []);
 
-    // Sync browser stream from agent progress store
-    const agentStreamUrl = activeProgress?.browserStream?.streamUrl ?? null;
-    const agentSandboxId = activeProgress?.browserStream?.sandboxId ?? null;
-    useEffect(() => {
-        if (activeProgress?.browserStream && agentStreamUrl && agentSandboxId) {
-            setBrowserStream(activeProgress.browserStream);
-        }
-    }, [agentStreamUrl, agentSandboxId, activeProgress?.browserStream, setBrowserStream]);
+    // Browser stream sync is handled by agent-progress-store's addEvent handler
+    // (browser_stream events call openWithBrowser on computer-store directly).
 
     // Handle close
     const handleClose = useCallback(() => {
@@ -207,41 +203,6 @@ export function VirtualComputerPanel() {
         setIsLive(true);
     }, [setIsLive]);
 
-    // Terminal command handler
-    const handleSendTerminalCommand = useCallback(async (command: string) => {
-        if (!command.trim()) return;
-
-        const cs = useComputerStore.getState();
-        const id = cs.activeConversationId;
-        if (!id) return;
-        const conv = cs.conversationStates[id];
-        if (!conv?.workspaceTaskId) return;
-
-        addTerminalLine({ type: "command", content: command, cwd: conv.currentCwd });
-
-        try {
-            const response = await fetch(`/api/v1/sandbox/exec`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    command,
-                    task_id: conv.workspaceTaskId,
-                    sandbox_type: conv.workspaceSandboxType || "execution",
-                }),
-            });
-            const data = await response.json();
-
-            if (data.stdout) {
-                addTerminalLine({ type: "output", content: data.stdout });
-            }
-            if (data.stderr) {
-                addTerminalLine({ type: "error", content: data.stderr });
-            }
-        } catch (error) {
-            addTerminalLine({ type: "error", content: `Error: ${error}` });
-        }
-    }, [addTerminalLine]);
-
     // Replay bar: auto-switch view when scrubbing
     const handleStepChange = useCallback((step: number) => {
         setCurrentStep(step);
@@ -266,8 +227,6 @@ export function VirtualComputerPanel() {
                         isLive={isLive}
                         currentCommand={currentCommand}
                         currentCwd={currentCwd}
-                        onClear={clearTerminal}
-                        onSendCommand={handleSendTerminalCommand}
                         className="flex-1"
                     />
                 );
@@ -285,7 +244,20 @@ export function VirtualComputerPanel() {
             default:
                 return null;
         }
-    }, [visibleTerminalLines, isLive, currentCommand, currentCwd, clearTerminal, handleSendTerminalCommand, browserStream]);
+    }, [visibleTerminalLines, isLive, currentCommand, currentCwd, browserStream]);
+
+    // Activity description from agent progress
+    const activityDescription = activeProgress?.currentStageDescription ?? null;
+
+    // Current running or last completed step from taskPlan
+    const currentPlanStep = useMemo(() => {
+        if (!taskPlan?.steps?.length) return null;
+        const running = taskPlan.steps.find((s) => s.status === "running");
+        if (running) return running;
+        // Find last completed
+        const completed = [...taskPlan.steps].reverse().find((s) => s.status === "completed");
+        return completed ?? taskPlan.steps[0];
+    }, [taskPlan]);
 
     if (!isOpen) return null;
 
@@ -335,11 +307,12 @@ export function VirtualComputerPanel() {
                     tabIndex={0}
                 />
 
-                {/* Tab bar */}
-                <ComputerTabBar
+                {/* Panel header (title + activity status) */}
+                <ComputerPanelHeader
                     activeMode={activeMode}
                     onModeChange={setModeByUser}
                     onClose={handleClose}
+                    activityDescription={activityDescription}
                 />
 
                 {/* View area with error boundary */}
@@ -357,118 +330,190 @@ export function VirtualComputerPanel() {
                         aria-label={getModeAriaLabel(activeMode)}
                     >
                         {renderViewForMode(activeMode)}
-
-                        {/* Floating live indicator */}
-                        {isLive && totalSteps > 0 && (
-                            <div className="absolute bottom-2 right-2 z-10">
-                                <button
-                                    className={cn(
-                                        "flex items-center gap-1 px-2 py-1 rounded-full",
-                                        "bg-primary/10 text-primary text-xs font-medium",
-                                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
-                                    )}
-                                    onClick={handleGoLive}
-                                    aria-label={t("live")}
-                                >
-                                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                                    {t("live")}
-                                </button>
-                            </div>
-                        )}
                     </div>
                 </ComputerErrorBoundary>
 
-                {/* Conditional replay bar (only when not live) */}
-                {!isLive && totalSteps > 0 && (
-                    <div className="flex items-center gap-1.5 px-3 h-9 border-t border-border shrink-0 bg-background">
-                        {/* Previous step */}
-                        <button
-                            className={cn(
-                                "h-7 w-7 inline-flex items-center justify-center rounded-md",
-                                "text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors",
-                                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
-                                "disabled:opacity-40 disabled:pointer-events-none"
-                            )}
-                            onClick={prevStep}
-                            disabled={currentStep <= 0}
-                            title={t("previousStep")}
-                            aria-label={t("previousStep")}
-                        >
-                            <ChevronLeft className="w-3.5 h-3.5" />
-                        </button>
+                {/* Always-visible timeline scrubber */}
+                <div className="flex items-center gap-1.5 px-3 h-9 border-t border-border shrink-0 bg-background">
+                    {/* Previous step */}
+                    <button
+                        className={cn(
+                            "h-7 w-7 inline-flex items-center justify-center rounded-md",
+                            "text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors",
+                            "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                            "disabled:opacity-40 disabled:pointer-events-none"
+                        )}
+                        onClick={prevStep}
+                        disabled={isLive || currentStep <= 0}
+                        title={t("previousStep")}
+                        aria-label={t("previousStep")}
+                    >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
 
-                        {/* Range slider */}
-                        <div className="flex-1 relative h-4 flex items-center">
-                            <div className="absolute inset-x-0 h-1 rounded-full bg-border" />
-                            {totalSteps > 0 && (
-                                <div
-                                    className="absolute left-0 h-1 rounded-full bg-foreground/30"
-                                    style={{ width: `${(currentStep / totalSteps) * 100}%` }}
-                                />
-                            )}
-                            <input
-                                type="range"
-                                min={0}
-                                max={totalSteps}
-                                value={currentStep}
-                                onChange={(e) => handleStepChange(parseInt(e.target.value, 10))}
-                                aria-label={t("stepOf", { current: currentStep, total: totalSteps })}
-                                aria-valuemin={0}
-                                aria-valuemax={totalSteps}
-                                aria-valuenow={currentStep}
-                                className={cn(
-                                    "absolute inset-0 w-full h-full opacity-0 cursor-pointer z-[2]",
-                                    "[&::-webkit-slider-thumb]:appearance-none",
-                                    "[&::-webkit-slider-thumb]:w-3",
-                                    "[&::-webkit-slider-thumb]:h-3",
-                                    "[&::-moz-range-thumb]:w-3",
-                                    "[&::-moz-range-thumb]:h-3"
-                                )}
+                    {/* Range slider */}
+                    <div className="flex-1 relative h-4 flex items-center">
+                        <div className="absolute inset-x-0 h-0.5 rounded-full bg-border" />
+                        {totalSteps > 0 && (
+                            <div
+                                className="absolute left-0 h-0.5 rounded-full bg-info"
+                                style={{ width: `${isLive ? 100 : (currentStep / totalSteps) * 100}%` }}
                             />
-                            {totalSteps > 0 && (
-                                <div
-                                    className="absolute w-2.5 h-2.5 rounded-full bg-foreground border-2 border-background -translate-x-1/2 z-[3] pointer-events-none"
-                                    style={{ left: `${(currentStep / totalSteps) * 100}%` }}
-                                />
-                            )}
-                        </div>
-
-                        {/* Next step */}
-                        <button
+                        )}
+                        <input
+                            type="range"
+                            min={0}
+                            max={totalSteps}
+                            value={isLive ? totalSteps : currentStep}
+                            onChange={(e) => {
+                                const val = parseInt(e.target.value, 10);
+                                if (val >= totalSteps) {
+                                    handleGoLive();
+                                } else {
+                                    setIsLive(false);
+                                    handleStepChange(val);
+                                }
+                            }}
+                            aria-label={t("stepOf", { current: isLive ? totalSteps : currentStep, total: totalSteps })}
+                            aria-valuemin={0}
+                            aria-valuemax={totalSteps}
+                            aria-valuenow={isLive ? totalSteps : currentStep}
                             className={cn(
-                                "h-7 w-7 inline-flex items-center justify-center rounded-md",
-                                "text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors",
-                                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
-                                "disabled:opacity-40 disabled:pointer-events-none"
+                                "absolute inset-0 w-full h-full opacity-0 cursor-pointer z-[2]",
+                                "[&::-webkit-slider-thumb]:appearance-none",
+                                "[&::-webkit-slider-thumb]:w-3",
+                                "[&::-webkit-slider-thumb]:h-3",
+                                "[&::-moz-range-thumb]:w-3",
+                                "[&::-moz-range-thumb]:h-3"
                             )}
-                            onClick={nextStep}
-                            disabled={currentStep >= totalSteps}
-                            title={t("nextStep")}
-                            aria-label={t("nextStep")}
-                        >
-                            <ChevronRight className="w-3.5 h-3.5" />
-                        </button>
+                        />
+                        {totalSteps > 0 && (
+                            <div
+                                className="absolute w-2.5 h-2.5 rounded-full bg-info border-2 border-background -translate-x-1/2 z-[3] pointer-events-none"
+                                style={{ left: `${isLive ? 100 : (currentStep / totalSteps) * 100}%` }}
+                            />
+                        )}
+                    </div>
 
-                        {/* Step counter */}
-                        <span className="text-xs text-muted-foreground tabular-nums min-w-[3ch] text-center">
-                            {currentStep}/{totalSteps}
-                        </span>
+                    {/* Next step */}
+                    <button
+                        className={cn(
+                            "h-7 w-7 inline-flex items-center justify-center rounded-md",
+                            "text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors",
+                            "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                            "disabled:opacity-40 disabled:pointer-events-none"
+                        )}
+                        onClick={nextStep}
+                        disabled={isLive || currentStep >= totalSteps}
+                        title={t("nextStep")}
+                        aria-label={t("nextStep")}
+                    >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
 
-                        {/* Go to Live button */}
-                        <button
-                            onClick={handleGoLive}
+                    {/* Live indicator / button */}
+                    <button
+                        onClick={handleGoLive}
+                        className={cn(
+                            "flex items-center gap-1 px-1.5 py-0.5 rounded",
+                            "text-xs font-medium transition-colors",
+                            "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                            isLive
+                                ? "text-info"
+                                : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+                        )}
+                        title={isLive ? t("live") : t("goToLive")}
+                        aria-label={isLive ? t("live") : t("goToLive")}
+                    >
+                        <span
                             className={cn(
-                                "flex items-center gap-1 px-1.5 py-0.5 rounded",
-                                "text-xs text-muted-foreground hover:text-foreground",
-                                "hover:bg-secondary transition-colors",
+                                "w-1.5 h-1.5 rounded-full",
+                                isLive ? "bg-info animate-pulse" : "bg-muted-foreground/50"
+                            )}
+                        />
+                        {t("live")}
+                    </button>
+                </div>
+
+                {/* Step progress bar (when taskPlan exists) */}
+                {taskPlan && taskPlan.steps.length > 0 && (
+                    <div className="border-t border-border shrink-0 bg-background">
+                        {/* Summary row */}
+                        <button
+                            onClick={() => setStepsExpanded((v) => !v)}
+                            className={cn(
+                                "flex items-center gap-2 w-full px-3 h-8 text-left",
+                                "hover:bg-secondary/30 transition-colors",
                                 "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                             )}
-                            title={t("goToLive")}
-                            aria-label={t("goToLive")}
                         >
-                            <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50" />
-                            {t("live")}
+                            {/* Status icon */}
+                            {currentPlanStep?.status === "completed" && (
+                                <Check className="w-3.5 h-3.5 text-success shrink-0" />
+                            )}
+                            {currentPlanStep?.status === "running" && (
+                                <Loader2 className="w-3.5 h-3.5 text-info animate-spin shrink-0" />
+                            )}
+                            {currentPlanStep?.status === "pending" && (
+                                <Circle className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                            )}
+                            {currentPlanStep?.status === "failed" && (
+                                <Circle className="w-3.5 h-3.5 text-destructive shrink-0" />
+                            )}
+
+                            {/* Step title */}
+                            <span className="text-xs text-foreground truncate flex-1">
+                                {currentPlanStep?.title}
+                            </span>
+
+                            {/* Counter */}
+                            <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+                                {taskPlan.completedSteps}/{taskPlan.totalSteps}
+                            </span>
+
+                            {/* Expand chevron */}
+                            {stepsExpanded ? (
+                                <ChevronUp className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                            ) : (
+                                <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                            )}
                         </button>
+
+                        {/* Expanded steps list */}
+                        {stepsExpanded && (
+                            <div className="px-3 pb-2 space-y-0.5 max-h-48 overflow-y-auto">
+                                {taskPlan.steps.map((step) => (
+                                    <div
+                                        key={step.id}
+                                        className="flex items-center gap-2 py-1 px-1 rounded text-xs"
+                                    >
+                                        {step.status === "completed" && (
+                                            <Check className="w-3 h-3 text-success shrink-0" />
+                                        )}
+                                        {step.status === "running" && (
+                                            <Loader2 className="w-3 h-3 text-info animate-spin shrink-0" />
+                                        )}
+                                        {step.status === "pending" && (
+                                            <Circle className="w-3 h-3 text-muted-foreground/40 shrink-0" />
+                                        )}
+                                        {step.status === "failed" && (
+                                            <Circle className="w-3 h-3 text-destructive shrink-0" />
+                                        )}
+                                        <span
+                                            className={cn(
+                                                "truncate",
+                                                step.status === "completed" && "text-muted-foreground",
+                                                step.status === "running" && "text-foreground font-medium",
+                                                step.status === "pending" && "text-muted-foreground/60",
+                                                step.status === "failed" && "text-destructive"
+                                            )}
+                                        >
+                                            {step.title}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

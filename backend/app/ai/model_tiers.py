@@ -17,7 +17,7 @@ class ModelTier(str, Enum):
 
     MAX = "max"  # Complex tasks: planning, reasoning, research
     PRO = "pro"  # Balanced general tasks: chat, code assistance
-    FLASH = "flash"  # Quick tasks: naming, summarization, routing
+    LITE = "lite"  # Quick tasks: naming, summarization, routing
 
 
 @dataclass
@@ -37,10 +37,81 @@ TASK_TIER_ROUTING: Dict[str, ModelTier] = {
     "app": ModelTier.MAX,  # App building requires complex reasoning and code generation
     "task": ModelTier.PRO,
     "data": ModelTier.PRO,
-    "routing": ModelTier.FLASH,
-    "naming": ModelTier.FLASH,
-    "summary": ModelTier.FLASH,
+    "routing": ModelTier.LITE,
+    "naming": ModelTier.LITE,
+    "summary": ModelTier.LITE,
 }
+
+
+# ---------------------------------------------------------------------------
+# Tier Quality Profiles — single source of truth for tier-dependent knobs
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TierQualityProfile:
+    """Quality knobs that vary by tier.
+
+    PRO values match today's hardcoded defaults so that
+    ``get_quality_profile(None)`` (which resolves to PRO) preserves
+    backward compatibility.
+    """
+
+    react_max_iterations: int = 5
+    react_max_parallel_tools: int = 5
+    react_tool_result_max_chars: int = 2000
+    search_max_results: int = 5
+    search_depth: str = "basic"
+    parallel_max_agents: int = 4
+    deep_research_max_iters_fast: int = 5
+    deep_research_max_iters_deep: int = 20
+    web_research_max_sources: int = 5
+    data_analysis_max_iterations: int = 20
+
+
+TIER_QUALITY_PROFILES: Dict[ModelTier, TierQualityProfile] = {
+    ModelTier.LITE: TierQualityProfile(
+        react_max_iterations=3,
+        react_max_parallel_tools=3,
+        react_tool_result_max_chars=1500,
+        search_max_results=3,
+        search_depth="basic",
+        parallel_max_agents=2,
+        deep_research_max_iters_fast=3,
+        deep_research_max_iters_deep=8,
+        web_research_max_sources=3,
+        data_analysis_max_iterations=10,
+    ),
+    ModelTier.PRO: TierQualityProfile(),  # defaults = PRO
+    ModelTier.MAX: TierQualityProfile(
+        react_max_iterations=10,
+        react_max_parallel_tools=8,
+        react_tool_result_max_chars=3000,
+        search_max_results=10,
+        search_depth="advanced",
+        parallel_max_agents=8,
+        deep_research_max_iters_fast=8,
+        deep_research_max_iters_deep=25,
+        web_research_max_sources=8,
+        data_analysis_max_iterations=25,
+    ),
+}
+
+
+def get_quality_profile(tier: "ModelTier | str | None" = None) -> TierQualityProfile:
+    """Resolve a tier to its quality profile.
+
+    Accepts ``ModelTier`` enum, a lowercase string (``"max"``, ``"pro"``,
+    ``"lite"``), or ``None`` (defaults to PRO for backward compat).
+    """
+    if tier is None:
+        return TIER_QUALITY_PROFILES[ModelTier.PRO]
+    if isinstance(tier, str):
+        try:
+            tier = ModelTier(tier.lower())
+        except ValueError:
+            return TIER_QUALITY_PROFILES[ModelTier.PRO]
+    return TIER_QUALITY_PROFILES.get(tier, TIER_QUALITY_PROFILES[ModelTier.PRO])
 
 
 # ---------------------------------------------------------------------------
@@ -85,10 +156,10 @@ def build_tier_mappings(settings=None) -> Dict[ModelTier, ModelMapping]:
         "openai": settings.tier_pro_openai,
         "gemini": settings.tier_pro_gemini,
     }
-    flash_models = {
-        "anthropic": settings.tier_flash_anthropic,
-        "openai": settings.tier_flash_openai,
-        "gemini": settings.tier_flash_gemini,
+    lite_models = {
+        "anthropic": settings.tier_lite_anthropic,
+        "openai": settings.tier_lite_openai,
+        "gemini": settings.tier_lite_gemini,
     }
 
     # Merge custom provider tier models
@@ -97,13 +168,13 @@ def build_tier_mappings(settings=None) -> Dict[ModelTier, ModelMapping]:
             max_models[cp.name] = cp.tier_models["max"]
         if "pro" in cp.tier_models:
             pro_models[cp.name] = cp.tier_models["pro"]
-        if "flash" in cp.tier_models:
-            flash_models[cp.name] = cp.tier_models["flash"]
+        if "lite" in cp.tier_models:
+            lite_models[cp.name] = cp.tier_models["lite"]
 
     result = {
         ModelTier.MAX: ModelMapping(models=max_models),
         ModelTier.PRO: ModelMapping(models=pro_models),
-        ModelTier.FLASH: ModelMapping(models=flash_models),
+        ModelTier.LITE: ModelMapping(models=lite_models),
     }
     if settings is _get_settings():
         _tier_mappings_cache = result
@@ -129,7 +200,7 @@ def build_tier_providers(settings=None) -> Dict[ModelTier, str]:
     result = {
         ModelTier.MAX: settings.max_model_provider or fallback,
         ModelTier.PRO: settings.pro_model_provider or fallback,
-        ModelTier.FLASH: settings.flash_model_provider or fallback,
+        ModelTier.LITE: settings.lite_model_provider or fallback,
     }
     if settings is _get_settings():
         _tier_providers_cache = result
@@ -206,7 +277,7 @@ def resolve_model_for_task(
 
 
 def get_all_tier_models() -> dict[str, dict[str, str]]:
-    """Return ``{provider_id: {max: model, pro: model, flash: model}}`` for all providers.
+    """Return ``{provider_id: {max: model, pro: model, lite: model}}`` for all providers.
 
     Used by the ``/providers`` API so the frontend can show which model each
     tier resolves to for each provider.

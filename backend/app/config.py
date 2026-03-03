@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # Per-tier provider override (blank = use default_provider)
     max_model_provider: str = ""
     pro_model_provider: str = ""
-    flash_model_provider: str = ""
+    lite_model_provider: str = ""
 
     # Vision provider override (blank = use default_provider)
     vision_model_provider: str = ""
@@ -60,9 +60,9 @@ class Settings(BaseSettings):
     tier_pro_openai: str = "gpt-4o-mini"
     tier_pro_gemini: str = "gemini-2.5-flash"
 
-    tier_flash_anthropic: str = "claude-3-5-haiku-20241022"
-    tier_flash_openai: str = "gpt-4o-mini"
-    tier_flash_gemini: str = "gemini-2.0-flash"
+    tier_lite_anthropic: str = "claude-haiku-4-5-20251001"
+    tier_lite_openai: str = "gpt-4o-mini"
+    tier_lite_gemini: str = "gemini-2.0-flash"
 
     # Multimodal Model Configuration
     # Image Understanding (Vision) - per-provider models
@@ -145,6 +145,15 @@ class Settings(BaseSettings):
 
     # Search
     tavily_api_key: str = ""
+
+    # Additional search providers
+    serper_api_key: str = ""  # Google Search via Serper API
+    jina_api_key: str = ""    # Jina Reader for deep content extraction
+
+    # Web research (agentic search) tuning
+    web_research_max_refinements: int = 3
+    web_research_confidence_threshold: float = 0.7
+    web_research_max_sub_queries: int = 6
 
     # Rate Limiting
     rate_limit_enabled: bool = True

@@ -49,9 +49,8 @@ from app.guardrails.scanners.output_scanner import output_scanner
 
 logger = get_logger(__name__)
 
-# Module-level caches for tool lists and config (computed once, thread-safe)
+# Module-level caches for tool lists (computed once, thread-safe)
 _cached_task_tools: list | None = None
-_cached_react_config = None
 _cache_lock = threading.Lock()
 
 
@@ -67,25 +66,19 @@ def _get_cached_task_tools() -> list:
     return _cached_task_tools
 
 
-def _get_cached_react_config():
-    """Get the react config for task, computing and caching on first call (thread-safe)."""
-    global _cached_react_config
-    if _cached_react_config is None:
-        with _cache_lock:
-            if _cached_react_config is None:
-                _cached_react_config = get_react_config("task")
-    return _cached_react_config
+def _get_react_config_for_state(state: dict):
+    """Build a tier-aware ReAct config from the current state."""
+    return get_react_config("task", tier=state.get("tier"))
 
 
 def clear_tool_cache() -> None:
-    """Reset cached task tools and react config.
+    """Reset cached task tools.
 
     Useful for testing or when tool registration changes at runtime.
     """
-    global _cached_task_tools, _cached_react_config
+    global _cached_task_tools
     with _cache_lock:
         _cached_task_tools = None
-        _cached_react_config = None
 
 
 def _extract_task_plan_from_messages(
@@ -158,6 +151,7 @@ async def _read_sandbox_todo(user_id: str | None, task_id: str | None) -> str | 
     """Read todo.md from sandbox, returning None if unavailable.
 
     Gracefully handles missing sandbox or file. Caps output at _TODO_MAX_SIZE.
+    Does NOT create a sandbox — only reads from an existing one.
     """
     try:
         from app.sandbox.execution_sandbox_manager import get_execution_sandbox_manager
@@ -168,11 +162,14 @@ async def _read_sandbox_todo(user_id: str | None, task_id: str | None) -> str | 
             return None
 
         manager = get_execution_sandbox_manager()
-        session = await manager.get_or_create_sandbox(user_id=user_id, task_id=task_id)
-        runtime = session.executor
-
-        if not runtime.sandbox_id:
+        session = await manager.get_session(user_id=user_id, task_id=task_id)
+        if session is None:
             return None
+
+        if not session.sandbox_id:
+            return None
+
+        runtime = session.executor.get_runtime()
 
         from app.sandbox import file_operations
 
@@ -207,13 +204,14 @@ async def _write_sandbox_todo(
 
         manager = get_execution_sandbox_manager()
         session = await manager.get_or_create_sandbox(user_id=user_id, task_id=task_id)
-        runtime = session.executor
 
-        if not runtime.sandbox_id:
+        if not session.sandbox_id:
             return False
 
+        runtime = session.executor.get_runtime()
+
         # Ensure directory exists
-        await runtime.execute("mkdir -p /home/user/.hyperagent")
+        await runtime.run_command("mkdir -p /home/user/.hyperagent", timeout=10)
 
         # Cap content
         if len(content) > _TODO_MAX_SIZE:
@@ -248,6 +246,7 @@ async def reason_node(state: TaskState) -> dict:
 
     event_list = []
     new_context_summary = None
+    did_upload_files = False
 
     # Initialize messages if empty
     if not lc_messages:
@@ -281,6 +280,10 @@ async def reason_node(state: TaskState) -> dict:
             lc_messages.append(image_message)
             logger.info("image_context_added_to_chat", image_count=len(image_attachments))
 
+        # File attachments are uploaded to sandbox lazily — on first sandbox tool
+        # invocation via TaskToolHooks.before_execution. The file context is already
+        # available in the system prompt for non-code tasks.
+
         # For dedicated modes (app, image, slide), directly synthesize a
         # tool call to invoke the corresponding skill.  This avoids relying
         # on the LLM to emit the correct invoke_skill call — some models
@@ -303,6 +306,10 @@ async def reason_node(state: TaskState) -> dict:
                 "skill_id": "data_analysis",
                 "param_key": "query",
             },
+            "research": {
+                "skill_id": "web_research",
+                "param_key": "query",
+            },
         }
 
         skill_spec = _DIRECT_SKILL_MODES.get(mode)
@@ -317,6 +324,34 @@ async def reason_node(state: TaskState) -> dict:
                 attachment_ids = state.get("attachment_ids") or []
                 if attachment_ids:
                     skill_params["attachment_ids"] = attachment_ids
+                # Pass context so the skill LLM has conversation history and config
+                skill_params["locale"] = state.get("locale", "en")
+                skill_params["provider"] = state.get("provider")
+                skill_params["model"] = state.get("model")
+                history = state.get("messages") or []
+                if history:
+                    skill_params["messages"] = history[-6:]
+
+            # Pass scenario, depth, and context for deep_research skill
+            if skill_spec["skill_id"] == "deep_research":
+                skill_params["scenario"] = state.get("scenario", "academic")
+                depth = state.get("depth")
+                if depth:
+                    # Handle both enum and string values
+                    skill_params["depth"] = depth.value if hasattr(depth, "value") else depth
+                else:
+                    skill_params["depth"] = "deep"
+                skill_params["locale"] = state.get("locale", "en")
+                skill_params["provider"] = state.get("provider")
+                skill_params["model"] = state.get("model")
+                history = state.get("messages") or []
+                if history:
+                    skill_params["messages"] = history[-6:]
+
+            # Thread tier so skills receive the quality profile
+            tier = state.get("tier")
+            if tier:
+                skill_params["tier"] = tier.value if hasattr(tier, "value") else tier
 
             ai_message = AIMessage(
                 content="",
@@ -325,6 +360,10 @@ async def reason_node(state: TaskState) -> dict:
                     "args": {
                         "skill_id": skill_spec["skill_id"],
                         "params": skill_params,
+                        # Include user_id/task_id directly in tool call args
+                        # to ensure they survive LangChain's tool parsing pipeline.
+                        "user_id": state.get("user_id"),
+                        "task_id": state.get("task_id"),
                     },
                     "id": tool_call_id,
                     "type": "tool_call",
@@ -337,14 +376,79 @@ async def reason_node(state: TaskState) -> dict:
                 skill_id=skill_spec["skill_id"],
                 original_query=query[:100],
             )
-            return {
+            result = {
                 "lc_messages": lc_messages,
                 "events": event_list,
                 "has_error": False,
             }
+            if did_upload_files:
+                result["files_uploaded_to_sandbox"] = True
+            return result
         else:
-            # Add current query
-            lc_messages.append(HumanMessage(content=query))
+            # Check for explicit skill selection from frontend
+            requested_skills = state.get("skills") or []
+            logger.debug(
+                "reason_node_skill_check",
+                mode=mode,
+                requested_skills=requested_skills,
+                has_skills=bool(requested_skills),
+            )
+            if requested_skills:
+                skill_id = requested_skills[0]
+                lc_messages.append(HumanMessage(content=query))
+                tool_call_id = f"direct_{skill_id}_{uuid.uuid4().hex[:8]}"
+                skill_params = {"query": query}
+
+                # Pass attachment_ids and context for data_analysis skill
+                if skill_id == "data_analysis":
+                    attachment_ids = state.get("attachment_ids") or []
+                    if attachment_ids:
+                        skill_params["attachment_ids"] = attachment_ids
+                    skill_params["locale"] = state.get("locale", "en")
+                    skill_params["provider"] = state.get("provider")
+                    skill_params["model"] = state.get("model")
+                    history = state.get("messages") or []
+                    if history:
+                        skill_params["messages"] = history[-6:]
+
+                # Thread tier so skills receive the quality profile
+                tier = state.get("tier")
+                if tier:
+                    skill_params["tier"] = tier.value if hasattr(tier, "value") else tier
+
+                ai_message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "invoke_skill",
+                        "args": {
+                            "skill_id": skill_id,
+                            "params": skill_params,
+                            # Include user_id/task_id directly in tool call args
+                            # to ensure they survive LangChain's tool parsing pipeline.
+                            "user_id": state.get("user_id"),
+                            "task_id": state.get("task_id"),
+                        },
+                        "id": tool_call_id,
+                        "type": "tool_call",
+                    }],
+                )
+                lc_messages.append(ai_message)
+                logger.info(
+                    "direct_skill_invocation_from_selection",
+                    skill_id=skill_id,
+                    original_query=query[:100],
+                )
+                result = {
+                    "lc_messages": lc_messages,
+                    "events": event_list,
+                    "has_error": False,
+                }
+                if did_upload_files:
+                    result["files_uploaded_to_sandbox"] = True
+                return result
+            else:
+                # Add current query
+                lc_messages.append(HumanMessage(content=query))
 
     # Debug: Log messages before deduplication
     logger.debug(
@@ -398,7 +502,7 @@ async def reason_node(state: TaskState) -> dict:
                 logger.warning("context_compression_skipped", error=str(e))
 
     # Apply message truncation to stay within token budget (fallback safety)
-    config = _get_cached_react_config()
+    config = _get_react_config_for_state(state)
     lc_messages, was_truncated = truncate_messages_to_budget(
         lc_messages,
         max_tokens=config.max_message_tokens,
@@ -575,6 +679,8 @@ async def reason_node(state: TaskState) -> dict:
             "events": event_list,
             "has_error": False,
         }
+        if did_upload_files:
+            result["files_uploaded_to_sandbox"] = True
         # Include context summary if compression occurred
         if new_context_summary:
             result["context_summary"] = new_context_summary
@@ -651,7 +757,7 @@ async def act_node(state: TaskState) -> dict:
 
     all_tools = _get_cached_task_tools()
     tool_map = {tool.name: tool for tool in all_tools}
-    config = _get_cached_react_config()
+    config = _get_react_config_for_state(state)
 
     def hitl_check(tool_name: str) -> bool:
         # invoke_skill is always routed through HITL partitioning so per-skill
@@ -1105,7 +1211,7 @@ async def verify_node(state: TaskState) -> dict:
     )
 
     try:
-        llm = llm_service.get_llm_for_tier(ModelTier.FLASH, provider=provider)
+        llm = llm_service.get_llm_for_tier(ModelTier.LITE, provider=provider)
         result = await llm.ainvoke([HumanMessage(content=verification_prompt)])
         verification_text = extract_text_from_content(result.content)
 
@@ -1288,7 +1394,7 @@ def should_continue(state: TaskState) -> Literal["act", "verify", "finalize"]:
         if isinstance(msg, AIMessage):
             if msg.tool_calls:
                 # Check iteration limit
-                config = _get_cached_react_config()
+                config = _get_react_config_for_state(state)
                 iters = state.get("tool_iterations", 0)
                 if iters >= config.max_iterations:
                     logger.warning(
@@ -1408,7 +1514,7 @@ async def wait_interrupt_node(state: TaskState) -> dict:
                     auto_approve_tools.append(tool_name)
                     logger.info("hitl_tool_auto_approved", tool_name=tool_name)
 
-                config = _get_cached_react_config()
+                config = _get_react_config_for_state(state)
                 ctx = ToolExecutionContext(
                     tool_name=tool_name,
                     tool_args=tool_args,

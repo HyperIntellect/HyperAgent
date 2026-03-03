@@ -6,6 +6,7 @@ import {
     FolderOpen,
     ChevronRight,
     ChevronLeft,
+    ChevronDown,
     RefreshCw,
     Loader2,
     Search,
@@ -22,16 +23,20 @@ import {
     X,
     Pencil,
     Save,
+    Presentation,
+    Download,
+    Paperclip,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useComputerStore, type FileEntry } from "@/lib/stores/computer-store";
+import { useComputerStore, type FileEntry, type ExternalFileEntry } from "@/lib/stores/computer-store";
 import { Badge } from "@/components/ui/badge";
 import { ComputerFileContent } from "./computer-file-content";
 import { ComputerEmptyState } from "./computer-empty-state";
+import type { SlideOutput } from "@/components/chat/slide-output-panel";
 
 interface ComputerFileViewProps {
     className?: string;
@@ -258,6 +263,269 @@ function FileItem({
     );
 }
 
+// Get icon for an external file based on source
+function getExternalFileIcon(file: ExternalFileEntry) {
+    if (file.source === "generated-image") {
+        return <FileImage className="w-4 h-4 flex-shrink-0 text-primary" />;
+    }
+    if (file.source === "generated-slide") {
+        return <Presentation className="w-4 h-4 flex-shrink-0 text-primary" />;
+    }
+    // Upload — use the same logic as workspace files
+    return getFileIcon(file.name, false, false);
+}
+
+// Get source badge label key
+function getSourceBadgeKey(source: ExternalFileEntry["source"]): string {
+    switch (source) {
+        case "upload": return "sourceUpload";
+        case "generated-image": return "sourceGenerated";
+        case "generated-slide": return "sourceSlide";
+    }
+}
+
+function ExternalFileItem({
+    file,
+    isSelected,
+    onClick,
+}: {
+    file: ExternalFileEntry;
+    isSelected: boolean;
+    onClick: () => void;
+}) {
+    const t = useTranslations("computer");
+
+    const formatSize = (bytes: number) => {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
+
+    return (
+        <button
+            onClick={onClick}
+            className={cn(
+                "w-full flex items-center gap-2.5 px-3 py-2 text-left group",
+                "hover:bg-secondary/80 transition-colors cursor-pointer",
+                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+                isSelected
+                    ? "bg-primary/8 border-l-2 border-l-primary"
+                    : "border-l-2 border-l-transparent"
+            )}
+        >
+            {getExternalFileIcon(file)}
+            <span className={cn(
+                "flex-1 text-sm truncate",
+                isSelected && "font-medium"
+            )}>
+                {file.name}
+            </span>
+            <Badge variant="subtle">{t(getSourceBadgeKey(file.source))}</Badge>
+            {file.fileSize > 0 && (
+                <span className="text-xs text-muted-foreground/80 tabular-nums">{formatSize(file.fileSize)}</span>
+            )}
+        </button>
+    );
+}
+
+/**
+ * Content view for an external file (upload, generated image, generated slide).
+ * Resolves content from base64Data, previewUrl, or renders slide info.
+ */
+function ExternalFileContentView({
+    file,
+    onBack,
+    className,
+}: {
+    file: ExternalFileEntry;
+    onBack: () => void;
+    className?: string;
+}) {
+    const t = useTranslations("computer");
+    const tPreview = useTranslations("preview");
+    const [content, setContent] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [isBinary, setIsBinary] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        setIsLoading(true);
+        setError(null);
+        setContent(null);
+        setIsBinary(false);
+
+        const load = async () => {
+            try {
+                // For generated images with base64 data
+                if (file.base64Data) {
+                    // If it's already a data URL, extract the base64 part
+                    if (file.base64Data.startsWith("data:")) {
+                        const base64Part = file.base64Data.split(",")[1] || "";
+                        if (!cancelled) {
+                            setContent(base64Part);
+                            setIsBinary(true);
+                            setIsLoading(false);
+                        }
+                        return;
+                    }
+                    if (!cancelled) {
+                        setContent(file.base64Data);
+                        setIsBinary(true);
+                        setIsLoading(false);
+                    }
+                    return;
+                }
+
+                // For files with a preview URL (images, uploads)
+                if (file.previewUrl) {
+                    // If it's a data URL, extract base64
+                    if (file.previewUrl.startsWith("data:")) {
+                        const base64Part = file.previewUrl.split(",")[1] || "";
+                        if (!cancelled) {
+                            setContent(base64Part);
+                            setIsBinary(true);
+                            setIsLoading(false);
+                        }
+                        return;
+                    }
+
+                    // Fetch from URL
+                    const res = await fetch(file.previewUrl);
+                    if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
+                    const ct = res.headers.get("content-type") || file.contentType || "";
+                    const isTextLike = ct.startsWith("text/") || ct.includes("json") || ct.includes("xml") || ct.includes("javascript");
+
+                    if (isTextLike) {
+                        const text = await res.text();
+                        if (!cancelled) {
+                            setContent(text);
+                            setIsBinary(false);
+                            setIsLoading(false);
+                        }
+                    } else {
+                        const buf = await res.arrayBuffer();
+                        const bytes = new Uint8Array(buf);
+                        let binary = "";
+                        for (let i = 0; i < bytes.length; i++) {
+                            binary += String.fromCharCode(bytes[i]);
+                        }
+                        if (!cancelled) {
+                            setContent(btoa(binary));
+                            setIsBinary(true);
+                            setIsLoading(false);
+                        }
+                    }
+                    return;
+                }
+
+                // For slides without preview URL — show slide info
+                if (file.source === "generated-slide") {
+                    if (!cancelled) {
+                        setContent(null);
+                        setIsLoading(false);
+                    }
+                    return;
+                }
+
+                if (!cancelled) {
+                    setContent(null);
+                    setIsLoading(false);
+                }
+            } catch (err) {
+                if (!cancelled) {
+                    setError(err instanceof Error ? err.message : t("workspace.failedToLoad"));
+                    setIsLoading(false);
+                }
+            }
+        };
+
+        load();
+        return () => { cancelled = true; };
+    }, [file]);
+
+    // For slides, render a special view
+    if (!isLoading && !error && file.source === "generated-slide") {
+        const slideData = file.slideOutput as SlideOutput | undefined;
+        return (
+            <div className={cn("flex-1 flex flex-col overflow-hidden", className)}>
+                <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-secondary/20">
+                    <button
+                        onClick={onBack}
+                        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                    >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        {t("workspace.title")}
+                    </button>
+                </div>
+                <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+                        <Presentation className="w-6 h-6 text-primary" />
+                    </div>
+                    <div className="text-center">
+                        <p className="text-sm font-semibold text-foreground">{file.name}</p>
+                        {slideData?.slide_count && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                                {tPreview("slideCountBadge", { count: slideData.slide_count })}
+                            </p>
+                        )}
+                    </div>
+                    {(file.downloadUrl || slideData?.download_url) && (
+                        <a
+                            href={file.downloadUrl || slideData?.download_url}
+                            download
+                            className={cn(
+                                "inline-flex items-center gap-1.5",
+                                "px-4 py-2 text-sm font-medium rounded-lg",
+                                "bg-primary text-primary-foreground",
+                                "hover:bg-primary/90 transition-colors"
+                            )}
+                        >
+                            <Download className="w-4 h-4" />
+                            {t("workspace.download")}
+                        </a>
+                    )}
+                    {/* Slide outline */}
+                    {slideData?.slide_outline && slideData.slide_outline.length > 0 && (
+                        <div className="w-full max-w-sm space-y-2 mt-2">
+                            {slideData.slide_outline.map((slide, i) => (
+                                <div key={i} className="px-3 py-2 rounded-lg bg-secondary/30 border border-border/30">
+                                    <p className="text-xs font-medium text-foreground">{slide.title}</p>
+                                    {slide.subtitle && (
+                                        <p className="text-xs text-muted-foreground mt-0.5">{slide.subtitle}</p>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className={cn("flex-1 flex flex-col overflow-hidden", className)}>
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-secondary/20">
+                <button
+                    onClick={onBack}
+                    className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    {t("workspace.title")}
+                </button>
+            </div>
+            <ComputerFileContent
+                filename={file.name}
+                content={content}
+                isLoading={isLoading}
+                error={error}
+                isBinary={isBinary}
+                className="flex-1"
+            />
+        </div>
+    );
+}
+
 export function ComputerFileView({ className }: ComputerFileViewProps) {
     const t = useTranslations("computer");
     const [searchQuery, setSearchQuery] = useState("");
@@ -280,6 +548,8 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
     const fileContentError = convState?.fileContentError ?? null;
     const fileContentIsBinary = convState?.fileContentIsBinary ?? false;
     const changedFiles = convState?.changedFiles ?? [];
+    const externalFiles = convState?.externalFiles ?? [];
+    const selectedExternalFile = convState?.selectedExternalFile ?? null;
 
     // Set of recently changed file paths for quick lookup
     const changedFilesSet = useMemo(() => new Set(changedFiles), [changedFiles]);
@@ -289,6 +559,11 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
     const setSelectedFile = useComputerStore((state) => state.setSelectedFile);
     const loadWorkspaceFiles = useComputerStore((state) => state.loadWorkspaceFiles);
     const loadFileContent = useComputerStore((state) => state.loadFileContent);
+    const selectExternalFile = useComputerStore((state) => state.selectExternalFile);
+    const clearExternalFileSelection = useComputerStore((state) => state.clearExternalFileSelection);
+
+    // Collapsible state for external files section
+    const [externalFilesExpanded, setExternalFilesExpanded] = useState(true);
 
     const [isRefreshing, setIsRefreshing] = React.useState(false);
 
@@ -454,64 +729,100 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
 
     const handleBackToList = useCallback(() => {
         setSelectedFile(null);
+        clearExternalFileSelection();
         setIsEditing(false);
-    }, [setSelectedFile]);
+    }, [setSelectedFile, clearExternalFileSelection]);
 
     return (
         <div className={cn("flex-1 flex flex-col overflow-hidden bg-background", className)}>
-            {/* Header with refresh and search buttons */}
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-secondary/20">
-                {isViewingContent ? (
-                    // Back button when viewing file content
-                    <button
-                        onClick={handleBackToList}
-                        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded"
-                    >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                        {t("workspace.title")}
-                    </button>
-                ) : (
-                    <span className="text-xs font-medium text-muted-foreground">
-                        {t("workspace.title")}
-                    </span>
-                )}
-                <div className="flex items-center gap-1">
-                    {!isViewingContent && (
+            {/* Header with refresh and search buttons — hidden when viewing external file (it has its own header) */}
+            {!selectedExternalFile && (
+                <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-secondary/20">
+                    {isViewingContent ? (
+                        // Back button when viewing file content
+                        <button
+                            onClick={handleBackToList}
+                            className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none rounded"
+                        >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                            {t("workspace.title")}
+                        </button>
+                    ) : (
+                        <span className="text-xs font-medium text-muted-foreground">
+                            {t("workspace.title")}
+                        </span>
+                    )}
+                    <div className="flex items-center gap-1">
+                        {!isViewingContent && (
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={toggleSearch}
+                                disabled={!isConnected}
+                                aria-label={t("workspace.search")}
+                                aria-expanded={isSearchOpen}
+                            >
+                                <Search className={cn("w-3.5 h-3.5", isSearchOpen && "text-primary")} />
+                            </Button>
+                        )}
                         <Button
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
-                            onClick={toggleSearch}
-                            disabled={!isConnected}
-                            aria-label={t("workspace.search")}
-                            aria-expanded={isSearchOpen}
+                            onClick={handleRefresh}
+                            disabled={!isConnected || isRefreshing}
+                            aria-label={t("workspace.refresh")}
                         >
-                            <Search className={cn("w-3.5 h-3.5", isSearchOpen && "text-primary")} />
+                            {isRefreshing ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                                <RefreshCw className="w-3.5 h-3.5" />
+                            )}
                         </Button>
-                    )}
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={handleRefresh}
-                        disabled={!isConnected || isRefreshing}
-                        aria-label={t("workspace.refresh")}
-                    >
-                        {isRefreshing ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                            <RefreshCw className="w-3.5 h-3.5" />
-                        )}
-                    </Button>
+                    </div>
                 </div>
-            </div>
+            )}
 
-            {!isConnected ? (
-                // No workspace connected
+            {selectedExternalFile ? (
+                // External file content view (uploads, generated images/slides)
+                <ExternalFileContentView
+                    file={selectedExternalFile}
+                    onBack={handleBackToList}
+                />
+            ) : !isConnected && externalFiles.length === 0 ? (
+                // No workspace connected and no external files
                 <ComputerEmptyState
                     icon={FolderClosed}
                     title={t("workspace.empty")}
                 />
+            ) : !isConnected && externalFiles.length > 0 ? (
+                // No workspace connected but has external files — show only external files
+                <ScrollArea className="flex-1">
+                    <div className="py-0.5">
+                        {/* External files section header */}
+                        <button
+                            onClick={() => setExternalFilesExpanded(!externalFilesExpanded)}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+                        >
+                            <ChevronDown className={cn(
+                                "w-3 h-3 transition-transform",
+                                !externalFilesExpanded && "-rotate-90"
+                            )} />
+                            <Paperclip className="w-3 h-3" />
+                            <span>{t("externalFiles")}</span>
+                            <span className="ml-auto text-muted-foreground/60 tabular-nums">{externalFiles.length}</span>
+                        </button>
+                        {externalFilesExpanded && externalFiles.map((file) => (
+                            <ExternalFileItem
+                                key={file.id}
+                                file={file}
+                                isSelected={false}
+                                onClick={() => selectExternalFile(file)}
+                            />
+                        ))}
+                    </div>
+                </ScrollArea>
             ) : isViewingContent ? (
                 // Drill-down: full-width file content view with edit support
                 isEditing ? (
@@ -664,6 +975,32 @@ export function ComputerFileView({ className }: ComputerFileViewProps) {
 
                     {/* File list */}
                     <ScrollArea className="flex-1">
+                        {/* External files section (above workspace files) */}
+                        {externalFiles.length > 0 && !searchQuery && (
+                            <div className="py-0.5 border-b border-border/30">
+                                <button
+                                    onClick={() => setExternalFilesExpanded(!externalFilesExpanded)}
+                                    className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+                                >
+                                    <ChevronDown className={cn(
+                                        "w-3 h-3 transition-transform",
+                                        !externalFilesExpanded && "-rotate-90"
+                                    )} />
+                                    <Paperclip className="w-3 h-3" />
+                                    <span>{t("externalFiles")}</span>
+                                    <span className="ml-auto text-muted-foreground/60 tabular-nums">{externalFiles.length}</span>
+                                </button>
+                                {externalFilesExpanded && externalFiles.map((file) => (
+                                    <ExternalFileItem
+                                        key={file.id}
+                                        file={file}
+                                        isSelected={false}
+                                        onClick={() => selectExternalFile(file)}
+                                    />
+                                ))}
+                            </div>
+                        )}
+
                         <div className="py-0.5" role="tree" aria-label={t("workspace.title")}>
                             {/* Parent directory */}
                             {currentPath !== "/" && !searchQuery && (

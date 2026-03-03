@@ -33,7 +33,13 @@ def _get_session_tool_names() -> set[str]:
         _SESSION_TOOLS.update(_app_builder_tool_names)
         _SESSION_TOOLS.add("invoke_skill")
         _SESSION_TOOLS.add("execute_code")
+        _SESSION_TOOLS.add("shell_exec")
         _SESSION_TOOLS.add("sandbox_file")
+        _SESSION_TOOLS.add("file_read")
+        _SESSION_TOOLS.add("file_write")
+        _SESSION_TOOLS.add("file_str_replace")
+        _SESSION_TOOLS.add("file_find_by_name")
+        _SESSION_TOOLS.add("file_find_in_content")
 
     return _SESSION_TOOLS
 
@@ -58,9 +64,15 @@ def inject_tool_context(
     session_tools = _get_session_tool_names()
 
     if tool_name in session_tools:
-        args["user_id"] = user_id
-        args["task_id"] = task_id
+        # Only overwrite if the injected value is not None, or the key is
+        # absent.  This prevents inject_tool_context from clobbering values
+        # that were already set via extra_tool_args in execute_react_loop.
+        if user_id is not None or "user_id" not in args:
+            args["user_id"] = user_id
+        if task_id is not None or "task_id" not in args:
+            args["task_id"] = task_id
     elif tool_name in _USER_ONLY_TOOLS:
-        args["user_id"] = user_id
+        if user_id is not None or "user_id" not in args:
+            args["user_id"] = user_id
 
     return args

@@ -149,7 +149,7 @@ export function PreferencesPanel({
               </span>
             </div>
             <div className="flex flex-wrap gap-1">
-              {(["auto", "max", "pro", "flash"] as const).map((t) => (
+              {(["max", "pro", "lite"] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTier(t)}
@@ -165,7 +165,7 @@ export function PreferencesPanel({
                 >
                   <Sparkles className="w-3.5 h-3.5 shrink-0" />
                   <span className="truncate">
-                    {t === "auto" ? tSettings("autoTier") : t.charAt(0).toUpperCase() + t.slice(1)}
+                    {t.charAt(0).toUpperCase() + t.slice(1)}
                   </span>
                 </button>
               ))}

@@ -85,6 +85,13 @@ class EventType(str, Enum):
     # Todo-list persistence events (sandbox todo.md updates)
     TODO_UPDATE = "todo_update"
 
+    # Web research (agentic search) events
+    SEARCH_PLAN = "search_plan"
+    SUB_QUERY_STATUS = "sub_query_status"
+    KNOWLEDGE_UPDATE = "knowledge_update"
+    CONFIDENCE_UPDATE = "confidence_update"
+    REFINEMENT_START = "refinement_start"
+
 
 class InterruptType(str, Enum):
     """Types of human-in-the-loop interrupts."""
@@ -407,6 +414,53 @@ class TodoUpdateEvent(BaseModel):
     timestamp: int = Field(default_factory=_timestamp, description="Event timestamp in ms")
 
 
+class SearchPlanEvent(BaseModel):
+    """Event containing the planned sub-queries for web research."""
+
+    type: Literal["search_plan"] = "search_plan"
+    sub_queries: list[dict[str, Any]] = Field(..., description="Planned sub-queries")
+    timestamp: int = Field(default_factory=_timestamp)
+
+
+class SubQueryStatusEvent(BaseModel):
+    """Event tracking individual sub-query progress."""
+
+    type: Literal["sub_query_status"] = "sub_query_status"
+    id: str = Field(..., description="Sub-query ID")
+    status: str = Field(..., description="pending|searching|done|gap")
+    coverage: float | None = Field(default=None, description="Coverage score 0-1")
+    timestamp: int = Field(default_factory=_timestamp)
+
+
+class KnowledgeUpdateEvent(BaseModel):
+    """Event with accumulated knowledge counts."""
+
+    type: Literal["knowledge_update"] = "knowledge_update"
+    facts_count: int = Field(..., description="Total extracted facts")
+    sources_count: int = Field(..., description="Total unique sources")
+    timestamp: int = Field(default_factory=_timestamp)
+
+
+class ConfidenceUpdateEvent(BaseModel):
+    """Event with overall search confidence."""
+
+    type: Literal["confidence_update"] = "confidence_update"
+    confidence: float = Field(..., description="Overall confidence 0-1")
+    coverage_summary: dict[str, float] = Field(
+        default_factory=dict, description="Per sub-query coverage"
+    )
+    timestamp: int = Field(default_factory=_timestamp)
+
+
+class RefinementStartEvent(BaseModel):
+    """Event indicating a refinement round is starting."""
+
+    type: Literal["refinement_start"] = "refinement_start"
+    round: int = Field(..., description="Refinement round number")
+    follow_up_queries: list[str] = Field(default_factory=list)
+    timestamp: int = Field(default_factory=_timestamp)
+
+
 class PlanOverviewEvent(BaseModel):
     """Event containing the full task plan for display in the progress view."""
 
@@ -437,7 +491,7 @@ class UsageEvent(BaseModel):
     cached_tokens: int = Field(default=0, description="Number of cached input tokens")
     cost_usd: float = Field(..., description="Estimated cost in USD")
     model: str = Field(..., description="Model name used")
-    tier: str = Field(..., description="Model tier (max, pro, flash)")
+    tier: str = Field(..., description="Model tier (max, pro, lite)")
     timestamp: int = Field(default_factory=_timestamp, description="Event timestamp in ms")
 
 
@@ -996,7 +1050,7 @@ def usage(
         cached_tokens: Number of cached input tokens
         cost_usd: Estimated cost in USD
         model: Model name used
-        tier: Model tier (max, pro, flash)
+        tier: Model tier (max, pro, lite)
 
     Returns:
         Usage event dictionary
@@ -1127,4 +1181,41 @@ def todo_update(
         content=content,
         checked=checked,
         total=total,
+    ).model_dump()
+
+
+def search_plan(sub_queries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Create a search_plan event dictionary."""
+    return SearchPlanEvent(sub_queries=sub_queries).model_dump()
+
+
+def sub_query_status(
+    id: str, status: str, coverage: float | None = None
+) -> dict[str, Any]:
+    """Create a sub_query_status event dictionary."""
+    return SubQueryStatusEvent(id=id, status=status, coverage=coverage).model_dump()
+
+
+def knowledge_update(facts_count: int, sources_count: int) -> dict[str, Any]:
+    """Create a knowledge_update event dictionary."""
+    return KnowledgeUpdateEvent(
+        facts_count=facts_count, sources_count=sources_count
+    ).model_dump()
+
+
+def confidence_update(
+    confidence: float, coverage_summary: dict[str, float] | None = None
+) -> dict[str, Any]:
+    """Create a confidence_update event dictionary."""
+    return ConfidenceUpdateEvent(
+        confidence=confidence, coverage_summary=coverage_summary or {}
+    ).model_dump()
+
+
+def refinement_start(
+    round: int, follow_up_queries: list[str] | None = None
+) -> dict[str, Any]:
+    """Create a refinement_start event dictionary."""
+    return RefinementStartEvent(
+        round=round, follow_up_queries=follow_up_queries or []
     ).model_dump()

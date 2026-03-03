@@ -27,12 +27,13 @@ import { useChatStore } from "@/lib/stores/chat-store";
 import { useSettingsStore } from "@/lib/stores/settings-store";
 import { useAgentProgressStore } from "@/lib/stores/agent-progress-store";
 import { useComputerStore } from "@/lib/stores/computer-store";
-import { usePreviewStore } from "@/lib/stores/preview-store";
+
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { FileUploadButton } from "@/components/chat/file-upload-button";
 import { AttachmentPreview } from "@/components/chat/attachment-preview";
 import { Button } from "@/components/ui/button";
 import { CostIndicator } from "@/components/ui/cost-indicator";
+import { SkillSelector } from "@/components/chat/skill-selector";
 import { useFileUpload } from "@/lib/hooks/use-file-upload";
 import { useGoogleDrivePicker } from "@/lib/hooks/use-google-drive-picker";
 import type {
@@ -61,7 +62,9 @@ import {
     filterEventsForSaving,
     isSearchTool,
     generatedImageToFileAttachment,
+    fileAttachmentToExternalEntry,
 } from "@/lib/utils/streaming-helpers";
+import type { ExternalFileEntry } from "@/lib/stores/computer-store";
 
 // Larger icons for better visual presence
 const AGENT_KEYS = ["research", "data", "app", "image", "slide"] as const;
@@ -213,6 +216,7 @@ export function ChatInterface() {
     const [showResearchSubmenu, setShowResearchSubmenu] = useState(false);
     const [submenuPosition, setSubmenuPosition] = useState<{ x: 'left' | 'right'; y: 'top' | 'bottom' }>({ x: 'right', y: 'bottom' });
     const submenuRef = useRef<HTMLDivElement>(null);
+    const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
     const [showModelMenu, setShowModelMenu] = useState(false);
     const modelMenuRef = useRef<HTMLDivElement>(null);
     const [streamingContent, setStreamingContent] = useState("");
@@ -405,16 +409,15 @@ export function ChatInterface() {
         updateStage: updateAgentStage,
         endProgress: endAgentProgress,
         clearProgress: clearAgentProgress,
-        setBrowserStream,
     } = useAgentProgressStore.getState();
 
     // Computer store - actions via getState() (stable references)
     const {
         addTerminalLine,
         setCurrentCommand,
-        openPanel: openComputerPanel,
         setMode: setComputerMode,
         smartOpen: smartOpenComputer,
+        resetUserSelectedMode: resetComputerUserSelectedMode,
         setWorkspaceContext,
         handleWorkspaceUpdate,
         refreshFiles,
@@ -423,9 +426,9 @@ export function ChatInterface() {
         getWorkspaceSandboxId,
     } = useComputerStore.getState();
 
-    // Preview store - for auto-opening generated images/slides in sidebar
-    const openPreview = usePreviewStore((state) => state.openPreview);
-    const openSlidePreview = usePreviewStore((state) => state.openSlidePreview);
+    // Computer store - for auto-opening generated images/slides in file browser
+    const addExternalFile = useComputerStore((state) => state.addExternalFile);
+    const openFileInBrowser = useComputerStore((state) => state.openFileInBrowser);
 
     const workspaceSandboxId = useComputerStore((state) => {
         const id = state.activeConversationId;
@@ -590,15 +593,30 @@ export function ChatInterface() {
         const userMessage = input.trim();
         const attachmentIds = getUploadedFileIds();
         const messageAttachments = attachments.filter(a => a.status === 'uploaded');
+        // Add uploaded files to external files in file browser
+        for (const att of messageAttachments) {
+            addExternalFile(fileAttachmentToExternalEntry(att, "upload"));
+        }
+        // Capture skill before clearing input state
+        const skillToUse = selectedSkill;
         setInput("");
         clearAttachments();
 
         if (selectedAgent === "research" && selectedScenario) {
-            handleResearch(userMessage);
+            await handleAgentTask(userMessage, "research", attachmentIds, messageAttachments);
+            setSelectedAgent(null);
+            setSelectedScenario(null);
         } else if (selectedAgent === "data" || selectedAgent === "app" || selectedAgent === "image" || selectedAgent === "slide") {
             await handleAgentTask(userMessage, selectedAgent, attachmentIds, messageAttachments);
             // Clear agent selection after first message - let conversation type take over
             setSelectedAgent(null);
+        } else if (!selectedAgent && activeConversation?.type === "research") {
+            await handleAgentTask(
+                userMessage,
+                "research",
+                attachmentIds,
+                messageAttachments
+            );
         } else if (!selectedAgent && activeConversation?.type === "data") {
             await handleAgentTask(
                 userMessage,
@@ -628,7 +646,7 @@ export function ChatInterface() {
                 messageAttachments
             );
         } else {
-            await handleChat(userMessage, false, attachmentIds, messageAttachments);
+            await handleChat(userMessage, false, attachmentIds, messageAttachments, skillToUse);
         }
     };
 
@@ -636,7 +654,8 @@ export function ChatInterface() {
         userMessage: string,
         skipUserMessage = false,
         attachmentIds: string[] = [],
-        messageAttachments: FileAttachment[] = []
+        messageAttachments: FileAttachment[] = [],
+        explicitSkill: string | null = null
     ) => {
         setStreamingContent("");
         streamingContentRef.current = "";
@@ -673,7 +692,8 @@ export function ChatInterface() {
             await addMessage(conversationId, {
                 role: "user",
                 content: userMessage,
-                attachments: messageAttachments
+                attachments: messageAttachments,
+                ...(explicitSkill && { metadata: { skill: explicitSkill } }),
             });
         }
 
@@ -683,6 +703,12 @@ export function ChatInterface() {
 
         // Start agent progress for sidebar visibility
         startAgentProgress(conversationId, "task");
+
+        // Reset manual tab selection so view follows agent for this new query
+        resetComputerUserSelectedMode();
+
+        // Track whether terminal panel has been opened this stream
+        let hasOpenedTerminal = false;
 
         // Add initial thinking event immediately for instant feedback
         const thinkingEvent: AgentEvent = {
@@ -732,7 +758,8 @@ export function ChatInterface() {
                     message: userMessage,
                     mode: "task",
                     ...(selectedProvider !== "auto" && { provider: selectedProvider }),
-                    ...(tier !== "auto" && { tier }),
+                    tier,
+                    ...((explicitSkill || selectedSkill) && { skills: [explicitSkill || selectedSkill] }),
                     attachment_ids: combinedAttachmentIds,
                     // Always send conversation_id (even for local conversations) to enable sandbox reuse
                     // Backend uses it as task_id for e2b sandbox session management
@@ -814,31 +841,28 @@ export function ChatInterface() {
                                     if (!isDuplicate) {
                                         ctx.collectedImages.push(imageData);
                                         ctx.collectedEvents.push(event);
-                                        // Auto-open generated image in preview sidebar
+                                        // Auto-open generated image in file browser
                                         const previewFile = generatedImageToFileAttachment(imageData);
-                                        if (previewFile) openPreview(previewFile);
+                                        if (previewFile) {
+                                            const entry = fileAttachmentToExternalEntry(previewFile, "generated-image");
+                                            if (previewFile.previewUrl?.startsWith("data:")) {
+                                                entry.base64Data = previewFile.previewUrl;
+                                            }
+                                            openFileInBrowser(entry);
+                                        }
                                     }
                                 }
                             } else if (event.type === "browser_stream") {
-                                // Handle browser stream event - show live browser view in virtual computer
-                                const streamUrl = event.stream_url as string;
-                                const sandboxId = event.sandbox_id as string;
-                                if (streamUrl && sandboxId) {
-                                    setBrowserStream({
-                                        streamUrl,
-                                        sandboxId,
-                                    });
-                                    // Force-open virtual computer panel to browser tab
-                                    smartOpenComputer("browser", true);
-                                    addStreamingEvent(event);
-                                }
+                                // Browser stream handling is consolidated in agent-progress-store
+                                // (via addStreamingEvent → addEvent) to avoid triple-write state updates.
+                                addStreamingEvent(event);
                             } else if (event.type === "browser_action") {
-                                // Handle browser action events - sync progress with browser stream
+                                // Browser action handling is consolidated in agent-progress-store.
+                                // We still emit a stage event for the streaming event timeline display.
                                 const action = event.action as string;
                                 const description = event.description as string;
                                 const target = event.target as string | undefined;
                                 const status = (event.status as string) || "running";
-                                // Transform to stage event for progress display
                                 const browserStageEvent: AgentEvent = {
                                     type: "stage",
                                     name: `browser_${action}`,
@@ -846,9 +870,6 @@ export function ChatInterface() {
                                     status: status === "completed" ? "completed" : "running",
                                 };
                                 addStreamingEvent(browserStageEvent);
-                                // Force-switch to browser on navigate; soft-switch on other actions
-                                const forceSwitch = action === "navigate";
-                                smartOpenComputer("browser", forceSwitch);
                             } else if (event.type === "terminal_command") {
                                 // Handle terminal command - agent is executing a shell command
                                 const command = event.command as string;
@@ -856,7 +877,11 @@ export function ChatInterface() {
                                 if (command) {
                                     setCurrentCommand(command, cwd);
                                     addTerminalLine({ type: "command", content: command, cwd });
-                                    smartOpenComputer("terminal", true);
+                                    // Only auto-open on the first terminal command in this stream
+                                    if (!hasOpenedTerminal) {
+                                        smartOpenComputer("terminal", false);
+                                        hasOpenedTerminal = true;
+                                    }
                                     addAgentEvent(event);
                                 }
                             } else if (event.type === "terminal_output") {
@@ -889,7 +914,17 @@ export function ChatInterface() {
                                 if (skillId === "slide_generation" && event.output) {
                                     const slideData = event.output as unknown as SlideOutput;
                                     if (slideData.download_url) {
-                                        openSlidePreview(slideData);
+                                        const slideEntry: ExternalFileEntry = {
+                                            id: `slide-${Date.now()}`,
+                                            name: slideData.title || "Presentation.pptx",
+                                            source: "generated-slide",
+                                            contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                            fileSize: 0,
+                                            downloadUrl: slideData.download_url,
+                                            slideOutput: slideData,
+                                            timestamp: Date.now(),
+                                        };
+                                        openFileInBrowser(slideEntry);
                                     }
                                 }
                             } else if (event.type === "workspace_update") {
@@ -921,9 +956,13 @@ export function ChatInterface() {
                                 // Auto-refresh file view with debounce + highlight changed paths
                                 refreshFiles([workspaceEvent.path]);
 
-                                // Smart-open panel on file creation or modification
-                                if (workspaceEvent.operation === "create" || workspaceEvent.operation === "modify") {
-                                    smartOpenComputer("file", true);
+                                // Only auto-open for app sandbox workspace updates
+                                // Execution sandbox file changes are typically noise (temp files, output)
+                                if (
+                                    (workspaceEvent.operation === "create" || workspaceEvent.operation === "modify") &&
+                                    workspaceEvent.sandbox_type === "app"
+                                ) {
+                                    smartOpenComputer("file", false);
                                 }
                             } else if (event.type === "interrupt") {
                                 const interruptEvent: InterruptEvent = {
@@ -1066,6 +1105,12 @@ export function ChatInterface() {
         // Start agent progress for sidebar visibility
         startAgentProgress(conversationId, agentType);
 
+        // Reset manual tab selection so view follows agent for this new query
+        resetComputerUserSelectedMode();
+
+        // Track whether terminal panel has been opened this stream
+        let hasOpenedTerminal = false;
+
         // Add initial thinking event immediately for instant feedback
         const thinkingEvent: AgentEvent = {
             type: "stage",
@@ -1114,7 +1159,10 @@ export function ChatInterface() {
                     message: userMessage,
                     mode: agentType,
                     ...(selectedProvider !== "auto" && { provider: selectedProvider }),
-                    ...(tier !== "auto" && { tier }),
+                    tier,
+                    ...(selectedSkill && { skills: [selectedSkill] }),
+                    ...(agentType === "research" && selectedScenario && { scenario: selectedScenario }),
+                    ...(agentType === "research" && { depth: selectedDepth }),
                     attachment_ids: combinedAttachmentIds,
                     // Always send conversation_id (even for local conversations) to enable sandbox reuse
                     // Backend uses it as task_id for e2b sandbox session management
@@ -1196,33 +1244,28 @@ export function ChatInterface() {
                                     if (!isDuplicate) {
                                         ctx.collectedImages.push(imageData);
                                         ctx.collectedEvents.push(event);
-                                        // Auto-open generated image in preview sidebar
+                                        // Auto-open generated image in file browser
                                         const previewFile = generatedImageToFileAttachment(imageData);
-                                        if (previewFile) openPreview(previewFile);
+                                        if (previewFile) {
+                                            const entry = fileAttachmentToExternalEntry(previewFile, "generated-image");
+                                            if (previewFile.previewUrl?.startsWith("data:")) {
+                                                entry.base64Data = previewFile.previewUrl;
+                                            }
+                                            openFileInBrowser(entry);
+                                        }
                                     }
                                 }
                             } else if (event.type === "browser_stream") {
-                                // Handle browser stream event - show live browser view in virtual computer
-                                const streamUrl = event.stream_url as string;
-                                const sandboxId = event.sandbox_id as string;
-                                const authKey = event.auth_key as string | undefined;
-                                if (streamUrl && sandboxId) {
-                                    setBrowserStream({
-                                        streamUrl,
-                                        sandboxId,
-                                        authKey,
-                                    });
-                                    // Force-open virtual computer panel to browser tab
-                                    smartOpenComputer("browser", true);
-                                    addStreamingEvent(event);
-                                }
+                                // Browser stream handling is consolidated in agent-progress-store
+                                // (via addStreamingEvent → addEvent) to avoid triple-write state updates.
+                                addStreamingEvent(event);
                             } else if (event.type === "browser_action") {
-                                // Handle browser action events - sync progress with browser stream
+                                // Browser action handling is consolidated in agent-progress-store.
+                                // We still emit a stage event for the streaming event timeline display.
                                 const action = event.action as string;
                                 const description = event.description as string;
                                 const target = event.target as string | undefined;
                                 const status = (event.status as string) || "running";
-                                // Transform to stage event for progress display
                                 const browserStageEvent: AgentEvent = {
                                     type: "stage",
                                     name: `browser_${action}`,
@@ -1230,9 +1273,6 @@ export function ChatInterface() {
                                     status: status === "completed" ? "completed" : "running",
                                 };
                                 addStreamingEvent(browserStageEvent);
-                                // Force-switch to browser on navigate; soft-switch on other actions
-                                const forceSwitch = action === "navigate";
-                                smartOpenComputer("browser", forceSwitch);
                             } else if (event.type === "skill_output") {
                                 // Handle skill output events
                                 const skillId = event.skill_id as string;
@@ -1243,7 +1283,17 @@ export function ChatInterface() {
                                 if (skillId === "slide_generation" && event.output) {
                                     const slideData = event.output as unknown as SlideOutput;
                                     if (slideData.download_url) {
-                                        openSlidePreview(slideData);
+                                        const slideEntry: ExternalFileEntry = {
+                                            id: `slide-${Date.now()}`,
+                                            name: slideData.title || "Presentation.pptx",
+                                            source: "generated-slide",
+                                            contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                            fileSize: 0,
+                                            downloadUrl: slideData.download_url,
+                                            slideOutput: slideData,
+                                            timestamp: Date.now(),
+                                        };
+                                        openFileInBrowser(slideEntry);
                                     }
                                 }
                             } else if (event.type === "workspace_update") {
@@ -1275,9 +1325,13 @@ export function ChatInterface() {
                                 // Auto-refresh file view with debounce + highlight changed paths
                                 refreshFiles([workspaceEvent.path]);
 
-                                // Smart-open panel on file creation or modification
-                                if (workspaceEvent.operation === "create" || workspaceEvent.operation === "modify") {
-                                    smartOpenComputer("file", true);
+                                // Only auto-open for app sandbox workspace updates
+                                // Execution sandbox file changes are typically noise (temp files, output)
+                                if (
+                                    (workspaceEvent.operation === "create" || workspaceEvent.operation === "modify") &&
+                                    workspaceEvent.sandbox_type === "app"
+                                ) {
+                                    smartOpenComputer("file", false);
                                 }
                             } else if (event.type === "interrupt") {
                                 const interruptEvent: InterruptEvent = {
@@ -1354,14 +1408,6 @@ export function ChatInterface() {
         }
     };
 
-    const handleResearch = (query: string) => {
-        if (!selectedScenario) return;
-        const taskId = crypto.randomUUID();
-        const taskInfo = { query, scenario: selectedScenario, depth: selectedDepth };
-        localStorage.setItem(`task-${taskId}`, JSON.stringify(taskInfo));
-        router.push(`/task/${taskId}`);
-    };
-
     // Use ref for stable callback reference
     const handleRegenerateRef = useRef<(messageId: string) => Promise<void>>();
     handleRegenerateRef.current = async (messageId: string) => {
@@ -1385,7 +1431,7 @@ export function ChatInterface() {
 
         // Check conversation type and call the appropriate handler
         const conversationType = activeConversation?.type;
-        if (conversationType === "data" || conversationType === "image" || conversationType === "app" || conversationType === "slide") {
+        if (conversationType === "research" || conversationType === "data" || conversationType === "image" || conversationType === "app" || conversationType === "slide") {
             // For specialized agent types, use handleAgentTask to maintain conversation type
             await handleAgentTask(userMessage, conversationType as AgentType, attachmentIds, userMessageAttachments);
         } else {
@@ -1550,11 +1596,11 @@ export function ChatInterface() {
                 >
                     {/* Welcome section - clean and minimal */}
                     {!hasMessages && (
-                        <div className="text-center mb-10">
-                            <h2 className="text-2xl md:text-3xl font-semibold text-foreground mb-3 tracking-tight">
+                        <div className="text-center mb-12">
+                            <h1 className="text-3xl md:text-4xl font-bold text-foreground tracking-tight leading-[1.15]">
                                 {t("welcomeTitle")}
-                            </h2>
-                            <p className="text-muted-foreground text-sm md:text-base leading-relaxed max-w-sm mx-auto">
+                            </h1>
+                            <p className="mt-3 text-muted-foreground text-sm md:text-base leading-relaxed max-w-md mx-auto">
                                 {t("welcomeSubtitle")}
                             </p>
                         </div>
@@ -1563,10 +1609,10 @@ export function ChatInterface() {
                     {/* Input - clean and focused */}
                     <div className="relative">
                         <div className={cn(
-                            "relative flex flex-col bg-card rounded-2xl border transition-all",
+                            "relative flex flex-col bg-card rounded-2xl border transition-colors",
                             hasMessages
                                 ? "border-border focus-within:border-foreground/15"
-                                : "border-border/70 shadow-sm focus-within:shadow-md"
+                                : "border-border/50 shadow-sm focus-within:shadow-md focus-within:border-foreground/20"
                         )}>
                             {/* Attachment preview */}
                             <AttachmentPreview
@@ -1583,10 +1629,10 @@ export function ChatInterface() {
                                     onChange={(e) => setInput(e.target.value)}
                                     placeholder={getPlaceholder()}
                                     className={cn(
-                                        "flex-1 bg-transparent text-foreground placeholder:text-muted-foreground/60 focus:outline-none leading-relaxed textarea-auto-resize resize-none",
+                                        "flex-1 bg-transparent text-foreground placeholder:text-muted-foreground/50 focus:outline-none leading-relaxed textarea-auto-resize resize-none",
                                         hasMessages
                                             ? "min-h-[48px] max-h-[140px] px-4 py-3 text-sm"
-                                            : "min-h-[72px] md:min-h-[88px] max-h-[180px] px-5 py-4 md:py-5 text-base"
+                                            : "min-h-[72px] md:min-h-[88px] max-h-[180px] px-5 py-4 md:py-5 text-base tracking-[-0.01em]"
                                     )}
                                     rows={hasMessages ? 2 : 3}
                                     onKeyDown={(e) => {
@@ -1599,7 +1645,7 @@ export function ChatInterface() {
                             </div>
 
                             {/* Bottom bar with plus button, model selector, hint and send button */}
-                            <div className="flex items-center justify-between px-3 md:px-4 pb-3 pt-1">
+                            <div className="flex items-center justify-between px-3 md:px-4 pb-3 pt-1.5 border-t border-border/30">
                                 <div className="flex items-center gap-2">
                                     <FileUploadButton
                                         onFilesSelected={addFiles}
@@ -1612,61 +1658,87 @@ export function ChatInterface() {
                                         <button
                                             onClick={() => setShowModelMenu(!showModelMenu)}
                                             className={cn(
-                                                "flex items-center gap-1 px-2 py-1 rounded-full",
-                                                "text-xs font-medium transition-colors",
-                                                "cursor-pointer",
-                                                "hover:bg-secondary",
-                                                tier !== "auto"
-                                                    ? "text-foreground"
-                                                    : "text-muted-foreground"
+                                                "flex items-center gap-1.5 px-2.5 py-1 rounded-full",
+                                                "text-xs font-semibold tracking-wide transition-all duration-150",
+                                                "cursor-pointer active:scale-[0.97]",
+                                                {
+                                                    max: "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 dark:hover:bg-amber-500/20",
+                                                    pro: "bg-primary/10 text-primary hover:bg-primary/15",
+                                                    lite: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/15 dark:hover:bg-emerald-500/20",
+                                                }[tier]
                                             )}
                                         >
-                                            <Sparkles className="w-3 h-3" />
-                                            <span>{tier === "auto" ? tSettings("autoTier") : tier.charAt(0).toUpperCase() + tier.slice(1)}</span>
-                                            <ChevronDown className="w-3 h-3" />
+                                            <Layers className="w-3 h-3" />
+                                            <span>{tier.charAt(0).toUpperCase() + tier.slice(1)}</span>
+                                            <ChevronDown className={cn("w-3 h-3 opacity-60 transition-transform duration-200", showModelMenu && "rotate-180")} />
                                         </button>
 
                                         {showModelMenu && (
-                                            <div className="absolute bottom-full left-0 mb-1 z-50 bg-card border border-border rounded-lg shadow-lg w-[220px]">
-                                                <div className="px-3 py-2 border-b border-border">
-                                                    <span className="text-xs font-medium text-muted-foreground">
-                                                        {tSettings("modelTier")}
-                                                    </span>
-                                                </div>
-                                                <div className="p-1">
-                                                    {(["auto", "max", "pro", "flash"] as const).map((tierOption) => (
-                                                        <button
-                                                            key={tierOption}
-                                                            onClick={() => {
-                                                                setTier(tierOption);
-                                                                setShowModelMenu(false);
-                                                            }}
-                                                            className={cn(
-                                                                "w-full px-2.5 py-2 flex flex-col items-start rounded-md transition-colors",
-                                                                "cursor-pointer",
-                                                                "hover:bg-accent",
-                                                                tier === tierOption
-                                                                    ? "bg-primary/10 text-foreground"
-                                                                    : "text-muted-foreground"
-                                                            )}
-                                                        >
-                                                            <span className="text-xs font-medium">
-                                                                {tierOption === "auto" ? tSettings("autoTier") : tierOption.charAt(0).toUpperCase() + tierOption.slice(1)}
-                                                            </span>
-                                                            <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                                                                {tSettings(`tierDescription.${tierOption}`)}
-                                                            </span>
-                                                        </button>
-                                                    ))}
+                                            <div className={cn(
+                                                "absolute bottom-full left-0 mb-2 z-50",
+                                                "w-[340px] rounded-xl overflow-hidden",
+                                                "bg-popover border border-border/80 shadow-xl shadow-black/8 dark:shadow-black/25",
+                                                "animate-in fade-in-0 slide-in-from-bottom-2 duration-150"
+                                            )}>
+                                                <div className="p-2 grid grid-cols-2 gap-1">
+                                                    {([
+                                                        { key: "max" as const, icon: Sparkles, bg: "bg-amber-500/10 dark:bg-amber-400/10", text: "text-amber-600 dark:text-amber-400", activeBg: "bg-amber-500/12", activeText: "text-amber-600 dark:text-amber-400" },
+                                                        { key: "pro" as const, icon: Layers, bg: "bg-primary/10", text: "text-primary", activeBg: "bg-primary/12", activeText: "text-primary" },
+                                                        { key: "lite" as const, icon: Zap, bg: "bg-emerald-500/10 dark:bg-emerald-400/10", text: "text-emerald-600 dark:text-emerald-400", activeBg: "bg-emerald-500/12", activeText: "text-emerald-600 dark:text-emerald-400" },
+                                                    ]).map(({ key: tierOption, icon: TierIcon, bg, text, activeBg, activeText }) => {
+                                                        const isSelected = tier === tierOption;
+                                                        return (
+                                                            <button
+                                                                key={tierOption}
+                                                                onClick={() => {
+                                                                    setTier(tierOption);
+                                                                    setShowModelMenu(false);
+                                                                }}
+                                                                className={cn(
+                                                                    "flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg text-left transition-colors",
+                                                                    "cursor-pointer hover:bg-accent/60",
+                                                                    isSelected && "bg-primary/[0.06] dark:bg-primary/[0.08] ring-1 ring-primary/15"
+                                                                )}
+                                                            >
+                                                                <div className={cn(
+                                                                    "flex items-center justify-center w-7 h-7 rounded-md shrink-0",
+                                                                    isSelected ? cn(activeBg, activeText) : cn(bg, text)
+                                                                )}>
+                                                                    <TierIcon className="w-3.5 h-3.5" />
+                                                                </div>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <span className="text-[13px] font-medium text-foreground block truncate">
+                                                                        {tierOption.charAt(0).toUpperCase() + tierOption.slice(1)}
+                                                                    </span>
+                                                                    <span className="text-[11px] text-muted-foreground block truncate leading-tight mt-0.5">
+                                                                        {tSettings(`tierDescription.${tierOption}`)}
+                                                                    </span>
+                                                                </div>
+                                                                {isSelected && (
+                                                                    <Check className="w-3.5 h-3.5 text-primary shrink-0" />
+                                                                )}
+                                                            </button>
+                                                        );
+                                                    })}
                                                 </div>
                                             </div>
                                         )}
                                     </div>
 
+                                    <span className="w-px h-4 bg-border/50" />
+
+                                    <SkillSelector
+                                        value={selectedSkill}
+                                        onChange={setSelectedSkill}
+                                        disabled={isProcessing}
+                                    />
+
+                                    <span className="w-px h-4 bg-border/50 hidden md:block" />
+
                                     {allUsageEvents.length > 0 && hasMessages ? (
                                         <CostIndicator events={allUsageEvents} />
                                     ) : (
-                                        <p className="text-xs text-muted-foreground/70 hidden md:block">
+                                        <p className="text-xs text-muted-foreground/50 tracking-wide hidden md:block">
                                             {attachments.length > 0
                                                 ? tChat("filesAttached", { count: attachments.length })
                                                 : tChat("pressEnterToSend")}
@@ -1676,7 +1748,7 @@ export function ChatInterface() {
                                 <Button
                                     onClick={isProcessing ? handleStop : handleSubmit}
                                     disabled={isUploading || (!isProcessing && !input.trim())}
-                                    variant={isProcessing ? "destructive" : (input.trim() && !isUploading ? "primary" : "default")}
+                                    variant={isProcessing ? "destructive" : (input.trim() && !isUploading ? "primary" : "ghost")}
                                     size="icon"
                                     className="rounded-full h-8 w-8"
                                 >
@@ -1692,21 +1764,20 @@ export function ChatInterface() {
 
                     {/* Agent selection - minimal pills (only on home view) */}
                     {!hasMessages && (
-                        <div className="mt-5">
-                            <div className="flex items-center justify-center gap-2 flex-wrap">
+                        <div className="mt-6">
+                            <div className="flex items-center justify-center gap-2.5 flex-wrap">
                                 {AGENT_KEYS.map((agent) => {
                                     const isSelected = selectedAgent === agent || (agent === "research" && selectedScenario);
                                     return (
                                         <div key={agent} className="relative" ref={agent === "research" ? researchRef : undefined}>
                                             <button
                                                 onClick={() => handleAgentSelect(agent)}
-                                                onMouseEnter={() => agent === "research" && setShowResearchSubmenu(true)}
                                                 className={cn(
                                                     "relative flex items-center gap-2 px-3.5 py-2 rounded-full transition-colors",
                                                     "text-sm font-medium",
                                                     isSelected
                                                         ? "bg-primary text-primary-foreground"
-                                                        : "bg-secondary/70 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                                        : "bg-secondary/50 text-muted-foreground border border-border/40 hover:bg-secondary hover:text-foreground hover:border-border/60"
                                                 )}
                                             >
                                                 {/* Selection checkmark */}
@@ -1741,7 +1812,6 @@ export function ChatInterface() {
                                                             submenuPosition.x === 'right' ? 'left-0' : 'right-0',
                                                             submenuPosition.y === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'
                                                         )}
-                                                        onMouseLeave={() => setShowResearchSubmenu(false)}
                                                     >
                                                         <div className="relative bg-card border border-border rounded-xl overflow-hidden w-[260px]"
                                                              style={{ maxWidth: 'min(260px, calc(100vw - 2rem))' }}

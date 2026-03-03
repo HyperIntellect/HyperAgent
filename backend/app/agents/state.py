@@ -101,6 +101,7 @@ class SupervisorState(TypedDict, total=False):
     model: str | None
     tier: ModelTier | None  # User-specified tier override
     locale: str  # User's preferred language (e.g., 'en', 'zh-CN')
+    skills: list[str]  # Optional skill IDs to guide agent execution
     budget: dict[str, Any] | None  # Optional budget constraints for this run
     execution_mode: str | None  # auto|guided|strict
 
@@ -141,6 +142,9 @@ class TaskState(SupervisorState, total=False):
     # Uses override reducer so the node always sets the full list.
     last_tool_calls_hash: Annotated[list[str], _override_reducer]
 
+    # Whether attached files have been uploaded to the sandbox (one-time flag)
+    files_uploaded_to_sandbox: bool
+
     # Enhanced verification
     verification_results: list[dict]  # Detailed per-step verification outcomes
     verified_steps: list[int]  # Step numbers that have been verified
@@ -150,7 +154,11 @@ class TaskState(SupervisorState, total=False):
 
 
 class ResearchState(SupervisorState, total=False):
-    """State for the research subagent."""
+    """DEPRECATED: Research is now handled by DeepResearchSkill.
+
+    This state is kept for backward compatibility with existing DB records
+    and migration scripts. Do not use for new code.
+    """
 
     # Research configuration
     depth: ResearchDepth
@@ -204,16 +212,6 @@ class TaskOutput(TypedDict, total=False):
     pending_handoff: HandoffInfo | None
     handoff_count: int
     handoff_history: list[HandoffInfo]
-
-
-class ResearchPostOutput(TypedDict, total=False):
-    """Return type for research_post_node."""
-
-    shared_memory: SharedAgentMemory
-    pending_handoff: HandoffInfo | None
-    handoff_count: int
-    handoff_history: list[HandoffInfo]
-    response: str
 
 
 class ErrorOutput(TypedDict, total=False):

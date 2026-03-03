@@ -106,9 +106,15 @@ async def _upload_attachments_to_sandbox(
     attachment_ids: list[str],
     user_id: str,
     task_id: str | None,
-) -> tuple[list[dict], bool]:
-    """Upload user's file attachments to the sandbox."""
+) -> tuple[list[dict], bool, list[str]]:
+    """Upload user's file attachments to the sandbox.
+
+    Returns:
+        Tuple of (events, success, uploaded_ids) where uploaded_ids contains
+        the IDs of files that were actually written to the sandbox.
+    """
     event_list: list[dict] = []
+    uploaded_ids: list[str] = []
     try:
         async with async_session_maker() as session:
             result = await session.execute(
@@ -119,11 +125,29 @@ async def _upload_attachments_to_sandbox(
             )
             files = result.scalars().all()
 
+            # Fallback: if user_id filter excluded files (e.g. deduplication),
+            # retry without the user_id constraint.
+            if not files:
+                result = await session.execute(
+                    select(FileModel).where(
+                        FileModel.id.in_(attachment_ids),
+                    )
+                )
+                files = result.scalars().all()
+                if files:
+                    logger.warning(
+                        "files_found_without_user_id_filter",
+                        attachment_ids=attachment_ids,
+                        user_id=user_id,
+                        file_user_ids=[f.user_id for f in files],
+                    )
+
             if not files:
                 err = "No files found for the provided attachment IDs"
                 logger.error(
                     "no_files_found_for_attachments",
                     attachment_ids=attachment_ids,
+                    user_id=user_id,
                 )
                 event_list.append(
                     agent_events.error(
@@ -131,7 +155,7 @@ async def _upload_attachments_to_sandbox(
                         description=f"Error: {err}",
                     )
                 )
-                return event_list, False
+                return event_list, False, []
 
             for f in files:
                 event_list.append(
@@ -156,7 +180,9 @@ async def _upload_attachments_to_sandbox(
                     task_id=task_id,
                 )
 
-                if not write_result.get("success"):
+                if write_result.get("success"):
+                    uploaded_ids.append(f.id)
+                else:
                     err = f"Failed to upload {f.original_filename}: {write_result.get('error')}"
                     logger.error(
                         "file_upload_failed",
@@ -177,9 +203,26 @@ async def _upload_attachments_to_sandbox(
             error=str(e),
         )
         event_list.append(agent_events.error(error_msg=str(e), name="execute", description=err))
-        return event_list, False
+        return event_list, False, uploaded_ids
 
-    return event_list, True
+    # Fail if no files were successfully uploaded
+    if not uploaded_ids:
+        err = "All file uploads to sandbox failed"
+        logger.error("all_file_uploads_failed", attachment_ids=attachment_ids)
+        event_list.append(
+            agent_events.error(error_msg=err, name="execute", description=err)
+        )
+        return event_list, False, []
+
+    if len(uploaded_ids) < len(files):
+        logger.warning(
+            "partial_file_upload",
+            total=len(files),
+            uploaded=len(uploaded_ids),
+            uploaded_ids=uploaded_ids,
+        )
+
+    return event_list, True, uploaded_ids
 
 
 async def _build_file_context(
@@ -197,6 +240,14 @@ async def _build_file_context(
                 )
             )
             files = result.scalars().all()
+            # Fallback without user_id filter
+            if not files:
+                result = await session.execute(
+                    select(FileModel).where(
+                        FileModel.id.in_(attachment_ids),
+                    )
+                )
+                files = result.scalars().all()
             for f in files:
                 safe_name = _safe_filename(f.id, f.original_filename)
                 file_info.append(
@@ -347,7 +398,11 @@ class DataAnalysisSkill(Skill):
             attachment_ids = params.get("attachment_ids", [])
             data_source = params.get("data_source", "")
             user_id = state.get("user_id")
-            task_id = state.get("task_id")
+
+            # Read context passed from task agent via input_params
+            provider_from_params = params.get("provider", state.get("provider"))
+            model_from_params = params.get("model", state.get("model"))
+            messages_from_params = params.get("messages", [])
 
             pending = list(state.get("pending_events", []))
             pending.append(
@@ -370,6 +425,14 @@ class DataAnalysisSkill(Skill):
                             )
                         )
                         files = result.scalars().all()
+                        # Fallback without user_id filter
+                        if not files:
+                            result = await session.execute(
+                                select(FileModel).where(
+                                    FileModel.id.in_(attachment_ids),
+                                )
+                            )
+                            files = result.scalars().all()
                         attachments_info = [
                             f"- {f.original_filename} ({f.content_type}, {f.file_size} bytes)"
                             for f in files
@@ -392,16 +455,14 @@ class DataAnalysisSkill(Skill):
                 "\n".join(attachments_info) if attachments_info else "No files attached."
             )
 
-            config = get_react_config("data")
-
             try:
                 planning_prompt = get_planning_prompt(
                     query,
                     attachments_ctx,
                 )
-                provider = state.get("provider")
+                provider = provider_from_params
                 tier = state.get("tier")
-                model = state.get("model")
+                model = model_from_params
                 llm = llm_service.choose_llm_for_task(
                     "data",
                     provider=provider,
@@ -411,54 +472,26 @@ class DataAnalysisSkill(Skill):
                 messages = [
                     SystemMessage(content=PLANNING_SYSTEM_PROMPT),
                 ]
-                append_history(
-                    messages,
-                    state.get("messages", []),
-                )
+                # Prefer messages passed via input_params (from task agent),
+                # fall back to state-level messages field.
+                history_msgs = messages_from_params or state.get("messages", [])
+                append_history(messages, history_msgs)
                 messages.append(
                     HumanMessage(content=planning_prompt),
                 )
 
-                all_tools = _get_data_tools()
+                # Planning is a pure reasoning step — no sandbox tools needed
+                # (files are uploaded later in code_loop).
                 plan = ""
-
-                if all_tools:
-                    llm_with_tools = llm.bind_tools(all_tools)
-                    extra = {
-                        "user_id": user_id,
-                        "task_id": task_id,
-                    }
-                    result = await execute_react_loop(
-                        llm_with_tools=llm_with_tools,
-                        messages=messages,
-                        tools=all_tools,
-                        query=query,
-                        config=config,
-                        source_agent="data",
-                        extra_tool_args=extra,
-                    )
-                    pending.extend(result.events)
-                    messages = result.messages
-
-                    if result.final_response:
-                        plan = result.final_response
-
-                if not plan:
-                    plan_msgs = [
-                        m
-                        for m in messages
-                        if not isinstance(m, ToolMessage)
-                        and not (isinstance(m, AIMessage) and m.tool_calls)
-                    ]
-                    chunks: list[str] = []
-                    async for chunk in llm.astream(plan_msgs):
-                        if chunk.content:
-                            c = extract_text_from_content(
-                                chunk.content,
-                            )
-                            if c:
-                                chunks.append(c)
-                    plan = "".join(chunks)
+                chunks: list[str] = []
+                async for chunk in llm.astream(messages):
+                    if chunk.content:
+                        c = extract_text_from_content(
+                            chunk.content,
+                        )
+                        if c:
+                            chunks.append(c)
+                plan = "".join(chunks)
 
                 # Detect analysis type
                 analysis_type = _detect_analysis_type(query)
@@ -518,11 +551,18 @@ class DataAnalysisSkill(Skill):
             state: DataAnalysisSkillState,
         ) -> dict:
             """Generate and execute code in a ReAct loop."""
+            params = state.get("input_params", {})
             query = state.get("query", "")
             analysis_plan = state.get("analysis_plan", "")
             attachment_ids = state.get("attachment_ids", [])
             user_id = state.get("user_id")
             task_id = state.get("task_id")
+
+            # Read context passed from task agent via input_params
+            locale = params.get("locale", state.get("locale", "en"))
+            provider = params.get("provider", state.get("provider"))
+            model = params.get("model", state.get("model"))
+            messages_from_params = params.get("messages", [])
 
             pending = list(state.get("pending_events", []))
             pending.append(
@@ -534,8 +574,9 @@ class DataAnalysisSkill(Skill):
             )
 
             # Upload attachments
+            uploaded_ids: list[str] = []
             if attachment_ids and user_id:
-                upload_evts, ok = await _upload_attachments_to_sandbox(
+                upload_evts, ok, uploaded_ids = await _upload_attachments_to_sandbox(
                     attachment_ids,
                     user_id,
                     task_id,
@@ -543,16 +584,20 @@ class DataAnalysisSkill(Skill):
                 pending.extend(upload_evts)
                 if not ok:
                     return {
-                        "execution_result": "Failed to upload files",
+                        "execution_result": (
+                            "Failed to upload files to sandbox."
+                            " Please check sandbox configuration."
+                        ),
                         "pending_events": pending,
                         "iterations": (state.get("iterations", 0) + 1),
                     }
 
-            # Build context
+            # Build context using only files that were actually uploaded to sandbox
             file_ctx = ""
-            if attachment_ids:
+            effective_ids = uploaded_ids if uploaded_ids else attachment_ids
+            if effective_ids:
                 file_ctx = await _build_file_context(
-                    attachment_ids,
+                    effective_ids,
                     user_id,
                 )
             data_ctx = (state.get("data_source", "") or "")[:2000]
@@ -565,7 +610,6 @@ class DataAnalysisSkill(Skill):
                 file_context=file_ctx,
             )
 
-            locale = state.get("locale", "en")
             if locale and locale != "en":
                 sys_msg = SystemMessage(
                     content=get_data_system_prompt(locale),
@@ -576,12 +620,13 @@ class DataAnalysisSkill(Skill):
             else:
                 sys_msg = DATA_ANALYSIS_SYSTEM_MESSAGE
             messages = [sys_msg]
-            append_history(messages, state.get("messages", []))
+            # Prefer messages passed via input_params (from task agent),
+            # fall back to state-level messages field.
+            history_msgs = messages_from_params or state.get("messages", [])
+            append_history(messages, history_msgs)
             messages.append(HumanMessage(content=code_prompt))
 
-            provider = state.get("provider")
-            tier = state.get("tier")
-            model = state.get("model")
+            tier = state.get("tier") or state.get("input_params", {}).get("tier")
             llm = llm_service.choose_llm_for_task(
                 "code",
                 provider=provider,
@@ -590,7 +635,7 @@ class DataAnalysisSkill(Skill):
             )
             all_tools = _get_data_tools()
             llm_with_tools = llm.bind_tools(all_tools)
-            config = get_react_config("data")
+            config = get_react_config("data", tier=tier)
 
             try:
                 result = await execute_react_loop(
@@ -652,6 +697,124 @@ class DataAnalysisSkill(Skill):
                             code = extracted
                             break
 
+                # Fallback A: if the LLM responded with text containing code
+                # but never called tools, extract and execute the code directly.
+                if result.tool_iterations == 0 and code and not execution_result:
+                    logger.info(
+                        "code_loop_fallback_execution",
+                        code_length=len(code),
+                    )
+                    pending.append(
+                        agent_events.stage(
+                            "code_loop",
+                            "LLM did not call tools — executing extracted code",
+                            "running",
+                        )
+                    )
+                    try:
+                        from app.agents.tools.code_execution import execute_code
+                        exec_result_str = await execute_code.ainvoke({
+                            "code": code,
+                            "user_id": user_id,
+                            "task_id": task_id,
+                        })
+                        try:
+                            parsed = json.loads(exec_result_str)
+                            execution_result = parsed.get("stdout", "")
+                            if parsed.get("stderr"):
+                                execution_result += f"\nErrors:\n{parsed['stderr']}"
+                            images = parsed.get("images", [])
+                        except (json.JSONDecodeError, AttributeError):
+                            execution_result = (
+                                exec_result_str
+                                if isinstance(exec_result_str, str)
+                                else str(exec_result_str)
+                            )
+                        logger.info(
+                            "code_loop_fallback_completed",
+                            has_result=bool(execution_result),
+                            image_count=len(images),
+                        )
+                    except Exception as fallback_err:
+                        logger.error(
+                            "code_loop_fallback_failed",
+                            error=str(fallback_err),
+                        )
+                        execution_result = f"Fallback execution error: {fallback_err}"
+
+                # Fallback B: LLM produced neither tool calls nor code text.
+                # Retry without tool binding (plain code generation) so models
+                # that struggle with tool-calling can still produce analysis code.
+                if result.tool_iterations == 0 and not code and not execution_result:
+                    logger.warning(
+                        "code_loop_no_output_retrying_without_tools",
+                        original_token_count=len([
+                            e for e in pending
+                            if isinstance(e, dict) and e.get("type") == "token"
+                        ]),
+                    )
+                    pending.append(
+                        agent_events.stage(
+                            "code_loop",
+                            "Retrying code generation without tool binding",
+                            "running",
+                        )
+                    )
+                    try:
+                        # Use plain LLM (no tools bound) with explicit code instruction
+                        retry_prompt = (
+                            "You MUST write Python code to analyze the data. "
+                            "Output ONLY a single ```python code block. "
+                            "The code should read the data file, perform analysis, "
+                            "and print results to stdout. "
+                            "Use matplotlib to save any charts to /tmp/outputs/."
+                        )
+                        retry_messages = list(messages) + [
+                            HumanMessage(content=retry_prompt),
+                        ]
+                        retry_chunks: list[str] = []
+                        async for chunk in llm.astream(retry_messages):
+                            if chunk.content:
+                                c = extract_text_from_content(chunk.content)
+                                if c:
+                                    retry_chunks.append(c)
+                                    pending.append(agent_events.token(c))
+                        retry_text = "".join(retry_chunks)
+                        code = _extract_code(retry_text)
+
+                        if code:
+                            logger.info(
+                                "code_loop_retry_code_extracted",
+                                code_length=len(code),
+                            )
+                            from app.agents.tools.code_execution import execute_code
+                            exec_result_str = await execute_code.ainvoke({
+                                "code": code,
+                                "user_id": user_id,
+                                "task_id": task_id,
+                            })
+                            try:
+                                parsed = json.loads(exec_result_str)
+                                execution_result = parsed.get("stdout", "")
+                                if parsed.get("stderr"):
+                                    execution_result += (
+                                        f"\nErrors:\n{parsed['stderr']}"
+                                    )
+                                images = parsed.get("images", [])
+                            except (json.JSONDecodeError, AttributeError):
+                                execution_result = (
+                                    exec_result_str
+                                    if isinstance(exec_result_str, str)
+                                    else str(exec_result_str)
+                                )
+                        else:
+                            logger.warning("code_loop_retry_no_code_extracted")
+                    except Exception as retry_err:
+                        logger.error(
+                            "code_loop_retry_failed",
+                            error=str(retry_err),
+                        )
+
                 # Emit image events
                 for img in images:
                     img_data = img.get("data", "")
@@ -711,11 +874,17 @@ class DataAnalysisSkill(Skill):
             state: DataAnalysisSkillState,
         ) -> dict:
             """Summarize the analysis results."""
+            params = state.get("input_params", {})
             query = state.get("query", "")
             execution_result = state.get("execution_result", "")
             code = state.get("code", "")
             analysis_type = state.get("analysis_type", "general")
             images = state.get("images", [])
+
+            # Read context passed from task agent via input_params
+            provider = params.get("provider", state.get("provider"))
+            model = params.get("model", state.get("model"))
+            messages_from_params = params.get("messages", [])
 
             pending = list(state.get("pending_events", []))
             pending.append(
@@ -726,9 +895,7 @@ class DataAnalysisSkill(Skill):
                 )
             )
 
-            provider = state.get("provider")
             tier = state.get("tier")
-            model = state.get("model")
             llm = llm_service.choose_llm_for_task(
                 "data",
                 provider=provider,
@@ -750,10 +917,8 @@ class DataAnalysisSkill(Skill):
                 messages = [
                     SystemMessage(content=SUMMARY_SYSTEM_PROMPT),
                 ]
-                append_history(
-                    messages,
-                    state.get("messages", []),
-                )
+                history_msgs = messages_from_params or state.get("messages", [])
+                append_history(messages, history_msgs)
                 messages.append(
                     HumanMessage(content=summary_prompt),
                 )

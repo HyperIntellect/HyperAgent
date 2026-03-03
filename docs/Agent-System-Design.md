@@ -250,7 +250,7 @@ Any OpenAI-compatible API can be registered via `CUSTOM_PROVIDERS` env var:
 | PRO | Balanced quality/speed | claude-sonnet-4 |
 | FLASH | Fast, cost-efficient | claude-3.5-haiku |
 
-Per-tier provider overrides: `MAX_MODEL_PROVIDER`, `PRO_MODEL_PROVIDER`, `FLASH_MODEL_PROVIDER`.
+Per-tier provider overrides: `MAX_MODEL_PROVIDER`, `PRO_MODEL_PROVIDER`, `LITE_MODEL_PROVIDER`.
 
 ### Thinking Mode
 

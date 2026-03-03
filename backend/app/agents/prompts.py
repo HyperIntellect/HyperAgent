@@ -516,16 +516,18 @@ def get_report_prompt(
     report_structure: list[str],
     report_length: str,
     locale: str = "en",
+    research_context: str = "",
 ) -> str:
     """Generate the report writing prompt for research agent.
 
     Args:
         query: Research query
         combined_findings: Combined analysis and synthesis findings
-        sources_text: Formatted sources text
+        sources_text: Formatted sources text with [N] reference numbers
         report_structure: List of report section names
         report_length: Length descriptor (concise, comprehensive, detailed and extensive)
         locale: User's preferred language code (e.g., 'en', 'zh-CN')
+        research_context: Rich extracted context from research tool results
 
     Returns:
         Formatted report prompt
@@ -534,20 +536,37 @@ def get_report_prompt(
         [f"{i + 1}. {section}" for i, section in enumerate(report_structure)]
     )
 
+    # Map report_length to concrete word count targets
+    word_count_map = {
+        "concise": "800–1500 words",
+        "comprehensive": "1500–2500 words",
+        "detailed and comprehensive": "2000–4000 words",
+    }
+    word_target = word_count_map.get(report_length, "2000–4000 words")
+
     # Reuse the shared language instruction helper
     language = LANGUAGE_MAP.get(locale, locale)
     language_instruction = f"\n\n<language>\nIMPORTANT: Write the entire report in {language}. All section headers, content, and conclusions must be in {language}.\n</language>" if locale != "en" else ""
+
+    research_context_section = ""
+    if research_context:
+        research_context_section = f"""
+<research_notes>
+Detailed research data extracted from browsed pages and search results.
+Use this data to support your analysis with specific evidence and citations.
+
+{research_context}
+</research_notes>
+"""
 
     return f"""<user>
 <task>Write a {report_length} research report on: {query}</task>
 
 <findings>
-Based on analysis and synthesis:
 {combined_findings}
 </findings>
-
+{research_context_section}
 <sources>
-Sources used:
 {sources_text}
 </sources>
 
@@ -556,13 +575,39 @@ Structure the report with these sections:
 {structure_str}
 </structure>
 
-<requirements>
-Ensure the report:
-- Is well-organized and easy to read
-- Cites specific sources where appropriate
-- Provides actionable insights
-- Acknowledges limitations of the research
-</requirements>{language_instruction}
+<formatting_requirements>
+## Length
+Target: {word_target}. Each main section should contain
+substantive analysis, not just a few sentences.
+
+## Structure & Formatting
+- Use `## Section Title` (H2) for each main section matching the structure above
+- Use `### Subsection Title` (H3) for subsections within each section
+- Write in full paragraphs with clear topic sentences
+- Include a comparison table or summary table of key findings where relevant
+- Use block quotes (`>`) for significant excerpts from sources
+
+## Citation Format
+- Number sources inline using `[1]`, `[2]`, etc., wherever a claim
+  or finding is referenced
+- Each inline citation must correspond to a numbered source in the References section
+- Multiple sources can be cited together: `[1][3]` or `[1, 3]`
+- End the report with a `## References` section listing all cited sources:
+  ```
+  ## References
+  [1] Source Title — URL
+  [2] Source Title — URL
+  ```
+
+## Content Depth
+- Each section must include substantive analysis, not just summaries or bullet lists
+- Compare and contrast perspectives from multiple sources
+- Include specific data points, statistics, numbers, and evidence
+- Provide your own analytical synthesis connecting findings across sources
+- Discuss implications and significance of the findings
+- Note areas of uncertainty, limitations, and gaps in available evidence
+- Include a brief discussion of areas for further research in the conclusion
+</formatting_requirements>{language_instruction}
 </user>"""
 
 

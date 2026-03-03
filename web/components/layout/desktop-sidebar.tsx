@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import Image from "next/image";
 import { useRouter, usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Sparkles, FolderOpen } from "lucide-react";
+import { Sparkles, Library } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { useChatStore } from "@/lib/stores/chat-store";
@@ -17,6 +17,7 @@ import {
     SIDEBAR_MIN_WIDTH,
     SIDEBAR_MAX_WIDTH,
 } from "@/lib/stores/sidebar-store";
+import { SidebarProjects } from "@/components/layout/sidebar-projects";
 
 interface DesktopSidebarProps {
     className?: string;
@@ -239,21 +240,24 @@ export function DesktopSidebar({ className }: DesktopSidebarProps) {
                 </button>
             </div>
 
-            {/* Projects Link */}
-            <div className="px-3 pb-2">
+            {/* Library Link */}
+            <div className="px-3 pb-1">
                 <button
-                    onClick={() => router.push("/projects")}
+                    onClick={() => router.push("/library")}
                     className={cn(
                         "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                        pathname === "/projects" || pathname?.startsWith("/projects/")
+                        pathname === "/library"
                             ? "bg-sidebar-accent text-sidebar-accent-foreground"
                             : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent"
                     )}
                 >
-                    <FolderOpen className="w-4 h-4" />
-                    <span>{t("projects")}</span>
+                    <Library className="w-4 h-4" />
+                    <span>{t("library")}</span>
                 </button>
             </div>
+
+            {/* Projects */}
+            <SidebarProjects variant="desktop" />
 
             <div className="mx-3 border-t border-sidebar-border" />
 

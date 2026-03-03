@@ -171,6 +171,7 @@ class UnifiedQueryRequest(BaseModel):
     tier: ModelTier | None = None  # Optional tier override
     history: list[ChatMessage] = Field(default_factory=list)
     attachment_ids: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list, description="Optional skill IDs to guide agent execution")
     locale: str = Field(default="en", description="User's preferred language (e.g., 'en', 'zh-CN')")
     budget: dict[str, Any] | None = Field(
         default=None,
@@ -188,6 +189,19 @@ class UnifiedQueryRequest(BaseModel):
 
         if not provider_registry.is_known(v):
             raise ValueError(f"Unknown provider: {v}")
+        return v
+
+    @field_validator("skills")
+    @classmethod
+    def check_skills(cls, v: list[str]) -> list[str]:
+        if not v:
+            return v
+        from app.services.skill_registry import skill_registry
+
+        available = {s.id for s in skill_registry.list_skills(enabled_only=True)}
+        invalid = [s for s in v if s not in available]
+        if invalid:
+            raise ValueError(f"Unknown skill(s): {invalid}. Available: {sorted(available)}")
         return v
 
 

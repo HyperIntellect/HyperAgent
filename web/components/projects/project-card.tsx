@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { MessageSquare, FileText } from "lucide-react";
+import { Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { COLOR_MAP } from "@/lib/utils/project-colors";
 import type { Project } from "@/lib/types/projects";
@@ -51,20 +51,16 @@ export function ProjectCard({ project, index = 0 }: ProjectCardProps) {
         </div>
       </div>
 
-      {/* Footer: counts */}
+      {/* Footer: unified item count */}
       <div className="flex items-center gap-3 mt-3 pt-3 border-t border-border/30">
         <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-          <MessageSquare className="w-3 h-3" />
+          <Layers className="w-3 h-3" />
           <span>
-            {t("conversationCount", {
-              count: project.conversation_count ?? 0,
+            {t("itemCount", {
+              count:
+                (project.conversation_count ?? 0) +
+                (project.research_task_count ?? 0),
             })}
-          </span>
-        </div>
-        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-          <FileText className="w-3 h-3" />
-          <span>
-            {t("taskCount", { count: project.research_task_count ?? 0 })}
           </span>
         </div>
       </div>

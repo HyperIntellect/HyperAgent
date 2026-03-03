@@ -4,7 +4,8 @@ import React from "react";
 import { Presentation, Download, Eye } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
-import { usePreviewStore } from "@/lib/stores/preview-store";
+import { useComputerStore } from "@/lib/stores/computer-store";
+import type { ExternalFileEntry } from "@/lib/stores/computer-store";
 
 export interface SlideElement {
   type: string;
@@ -37,7 +38,7 @@ interface SlideOutputPanelProps {
  */
 export function SlideOutputPanel({ output }: SlideOutputPanelProps) {
   const t = useTranslations("preview");
-  const openSlidePreview = usePreviewStore((state) => state.openSlidePreview);
+  const openFileInBrowser = useComputerStore((state) => state.openFileInBrowser);
 
   return (
     <div
@@ -104,7 +105,19 @@ export function SlideOutputPanel({ output }: SlideOutputPanelProps) {
         </a>
         {output.slide_outline && output.slide_outline.length > 0 && (
           <button
-            onClick={() => openSlidePreview(output)}
+            onClick={() => {
+              const entry: ExternalFileEntry = {
+                id: `slide-preview-${Date.now()}`,
+                name: output.title || "Presentation.pptx",
+                source: "generated-slide",
+                contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                fileSize: 0,
+                downloadUrl: output.download_url,
+                slideOutput: output,
+                timestamp: Date.now(),
+              };
+              openFileInBrowser(entry);
+            }}
             className={cn(
               "inline-flex items-center gap-1.5",
               "px-3 py-1.5",

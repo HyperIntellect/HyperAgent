@@ -6,7 +6,8 @@ import { SkillMetadata } from "@/lib/types/skills";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Code } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CATEGORY_ICONS, CATEGORY_ACCENT, DEFAULT_ACCENT } from "@/lib/utils/skill-categories";
+import { SKILL_ICONS, SKILL_ACCENT, CATEGORY_ICONS, CATEGORY_ACCENT, DEFAULT_ACCENT } from "@/lib/utils/skill-categories";
+import { getTranslatedSkillName, getTranslatedSkillDescription, getTranslatedCategory } from "@/lib/utils/skill-i18n";
 
 interface SkillCardProps {
   skill: SkillMetadata;
@@ -18,9 +19,9 @@ export function SkillCard({ skill, onExecute, index = 0 }: SkillCardProps) {
   const t = useTranslations("skills");
   const router = useRouter();
   const Icon =
-    CATEGORY_ICONS[skill.category as keyof typeof CATEGORY_ICONS] || Code;
+    SKILL_ICONS[skill.id] || CATEGORY_ICONS[skill.category as keyof typeof CATEGORY_ICONS] || Code;
   const accent =
-    CATEGORY_ACCENT[skill.category as keyof typeof CATEGORY_ACCENT] || DEFAULT_ACCENT;
+    SKILL_ACCENT[skill.id] || CATEGORY_ACCENT[skill.category as keyof typeof CATEGORY_ACCENT] || DEFAULT_ACCENT;
 
   const paramCount = skill.parameters?.length ?? 0;
 
@@ -45,14 +46,14 @@ export function SkillCard({ skill, onExecute, index = 0 }: SkillCardProps) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h4 className="font-semibold text-sm text-foreground truncate">
-              {skill.name}
+              {getTranslatedSkillName(skill.id, skill.name, t)}
             </h4>
             <span className="shrink-0 text-[10px] text-muted-foreground/60 font-mono">
               v{skill.version}
             </span>
           </div>
           <p className="text-xs text-muted-foreground mt-1 line-clamp-2 leading-relaxed">
-            {skill.description}
+            {getTranslatedSkillDescription(skill.id, skill.description, t)}
           </p>
         </div>
       </div>
@@ -83,7 +84,7 @@ export function SkillCard({ skill, onExecute, index = 0 }: SkillCardProps) {
       <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/30">
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
           <span className="uppercase tracking-wider font-medium">
-            {skill.category}
+            {getTranslatedCategory(skill.category, t)}
           </span>
           {paramCount > 0 && (
             <>

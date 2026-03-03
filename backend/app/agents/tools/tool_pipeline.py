@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
+from pydantic import BaseModel
 
 from app.agents.tools.context_injection import inject_tool_context
 from app.agents.tools.react_tool import (
@@ -25,6 +26,34 @@ from app.agents.tools.react_tool import (
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# Fields injected by the pipeline (not provided by the LLM)
+_INJECTED_FIELDS = {"user_id", "task_id"}
+
+
+def _validate_required_args(tool: BaseTool, args: dict) -> list[str]:
+    """Check if required args (excluding injected fields) are present.
+
+    Uses the tool's args_schema (Pydantic model) to identify required fields.
+
+    Returns:
+        List of missing required field names, empty if all present.
+    """
+    schema: type[BaseModel] | None = getattr(tool, "args_schema", None)
+    if schema is None:
+        return []
+
+    missing = []
+    for field_name, field_info in schema.model_fields.items():
+        if field_name in _INJECTED_FIELDS:
+            continue
+        if field_info.is_required() and (
+            field_name not in args or args[field_name] is None
+        ):
+            missing.append(field_name)
+
+    return missing
 
 
 # Tools that require sequential execution due to side effects
@@ -202,6 +231,37 @@ async def execute_tool(
             events=all_events,
             is_error=True,
             error_category=ErrorCategory.RESOURCE,
+        )
+
+    # 4b. Pre-validate required args before invocation
+    missing_args = _validate_required_args(ctx.tool, ctx.tool_args)
+    if missing_args:
+        error_msg = (
+            f"Tool '{ctx.tool_name}' requires the following argument(s) "
+            f"that were not provided: {', '.join(missing_args)}. "
+            f"Please call this tool again with all required arguments."
+        )
+        logger.warning(
+            "tool_args_validation_failed",
+            tool=ctx.tool_name,
+            missing_args=missing_args,
+            provided_args=list(ctx.tool_args.keys()),
+        )
+        final_status = "failed"
+        final_error = error_msg
+        result_events = hooks.on_tool_result(
+            ctx.tool_name, error_msg, ctx.tool_call_id
+        )
+        all_events.extend(result_events)
+        return ToolExecutionResult(
+            message=ToolMessage(
+                content=error_msg,
+                tool_call_id=ctx.tool_call_id,
+                name=ctx.tool_name,
+            ),
+            events=all_events,
+            is_error=True,
+            error_category=ErrorCategory.INPUT,
         )
 
     # 5. Execute tool
@@ -477,7 +537,7 @@ class TaskToolHooks(ToolExecutionHooks):
     async def before_execution(
         self, ctx: ToolExecutionContext
     ) -> ToolExecutionResult | None:
-        """HITL approval check, ask_user handling, guardrail scan."""
+        """HITL approval check, ask_user handling, guardrail scan, lazy upload."""
         from app.agents.hitl.interrupt_manager import get_interrupt_manager
         from app.agents.hitl.tool_risk import requires_approval, requires_approval_for_skill
         from app.agents.policy import PolicyInput, get_policy_engine
@@ -490,9 +550,44 @@ class TaskToolHooks(ToolExecutionHooks):
         user_id = self.state.get("user_id")
         task_id = self.state.get("task_id")
 
+        # Lazy attachment upload: upload files to sandbox on first sandbox tool use
+        _SANDBOX_TOOLS = {
+            "execute_code", "execute_script", "sandbox_file",
+            "shell_exec", "shell_view", "shell_wait", "shell_kill",
+            "file_read", "file_write", "file_str_replace",
+            "file_find_by_name", "file_find_in_content",
+        }
+
+        if (
+            ctx.tool_name in _SANDBOX_TOOLS
+            and not self.state.get("files_uploaded_to_sandbox")
+        ):
+            attachment_ids = self.state.get("attachment_ids") or []
+            if attachment_ids and user_id:
+                from app.agents.skills.builtin.data_analysis_skill import (
+                    _upload_attachments_to_sandbox,
+                )
+
+                _upload_evts, _ok, _ = await _upload_attachments_to_sandbox(
+                    attachment_ids, user_id, task_id,
+                )
+                if _ok:
+                    self.state["files_uploaded_to_sandbox"] = True
+
         # 0. Skill-level HITL policy (invoke_skill can encapsulate high-risk tools)
         if ctx.tool_name == "invoke_skill":
             skill_id = str(ctx.tool_args.get("skill_id", "")).strip()
+
+            # Skip HITL approval if the skill was explicitly selected by the user
+            # (the user already indicated intent by choosing the skill from the UI)
+            explicitly_selected_skills = self.state.get("skills") or []
+            if skill_id and skill_id in explicitly_selected_skills:
+                logger.info(
+                    "hitl_skip_explicitly_selected_skill",
+                    skill_id=skill_id,
+                )
+                return None  # Proceed to execution without HITL
+
             skill_policy = get_policy_engine().decide(
                 PolicyInput(
                     tool_name="invoke_skill",
@@ -751,10 +846,11 @@ class TaskToolHooks(ToolExecutionHooks):
     def after_execution(
         self, ctx: ToolExecutionContext, result_str: str, events: list[dict]
     ) -> str:
-        """Extract events from tool results (images, skills, app builder, slides)."""
+        """Extract events from tool results (images, skills, app builder, shell/code, slides)."""
         from app.agents.tools.event_extraction import (
             extract_app_builder_events,
             extract_image_events,
+            extract_shell_and_code_events,
             extract_skill_events,
             extract_slide_events,
         )
@@ -783,6 +879,7 @@ class TaskToolHooks(ToolExecutionHooks):
             user_id,
         )
         extract_slide_events(ctx.tool_name, result_str, events)
+        extract_shell_and_code_events(ctx.tool_name, result_str, events)
 
         return result_str
 

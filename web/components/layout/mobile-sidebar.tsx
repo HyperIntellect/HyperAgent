@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import { useRouter, usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Sparkles, FolderOpen } from "lucide-react";
+import { Sparkles, Library } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { useChatStore } from "@/lib/stores/chat-store";
@@ -12,6 +12,7 @@ import { useTaskStore } from "@/lib/stores/task-store";
 import { RecentTasks, type RecentItem } from "@/components/ui/recent-tasks";
 import { CreateMenu } from "@/components/ui/create-menu";
 import { MenuToggle } from "@/components/ui/menu-toggle";
+import { SidebarProjects } from "@/components/layout/sidebar-projects";
 
 interface MobileSidebarProps {
     isOpen: boolean;
@@ -278,24 +279,27 @@ export function MobileSidebar({ isOpen, onClose }: MobileSidebarProps) {
                     </button>
                 </div>
 
-                {/* Projects Link */}
-                <div className="px-3 pb-2">
+                {/* Library Link */}
+                <div className="px-3 pb-1">
                     <button
                         onClick={() => {
-                            router.push("/projects");
+                            router.push("/library");
                             onClose();
                         }}
                         className={cn(
                             "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                            pathname === "/projects" || pathname?.startsWith("/projects/")
+                            pathname === "/library"
                                 ? "bg-secondary text-foreground"
                                 : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
                         )}
                     >
-                        <FolderOpen className="w-4 h-4" />
-                        <span>{t("projects")}</span>
+                        <Library className="w-4 h-4" />
+                        <span>{t("library")}</span>
                     </button>
                 </div>
+
+                {/* Projects */}
+                <SidebarProjects variant="mobile" onNavigate={onClose} />
 
                 <div className="mx-3 border-t border-border/50" />
 

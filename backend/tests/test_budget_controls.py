@@ -28,14 +28,14 @@ def test_marks_budget_exhausted():
     assert budget_state["exhausted"] is True
 
 
-def test_applies_strict_budget_downgrade_to_flash():
+def test_applies_strict_budget_downgrade_to_lite():
     tier, depth, adjustment = _apply_budget_pressure_defaults(
         budget={"max_cost_usd": 0.03},
         mode="task",
         tier="max",
         depth=ResearchDepth.DEEP,
     )
-    assert tier == "flash"
+    assert tier == "lite"
     assert depth == ResearchDepth.DEEP
     assert adjustment is not None
     assert adjustment["reason"] == "strict_budget"
@@ -48,7 +48,7 @@ def test_applies_research_depth_downgrade_on_strict_budget():
         tier="max",
         depth=ResearchDepth.DEEP,
     )
-    assert tier == "flash"
+    assert tier == "lite"
     assert depth == ResearchDepth.FAST
     assert adjustment is not None
 

@@ -15,15 +15,15 @@ class CustomProviderConfig:
     default_model: str = ""  # e.g. "deepseek-chat" (optional if tier_models provided)
     display_name: str = ""  # Human-readable name for UI (defaults to name.title())
     tier_models: dict[str, str] = field(default_factory=dict)
-    # Optional: {"max": "deepseek-reasoner", "pro": "deepseek-chat", "flash": "deepseek-chat"}
+    # Optional: {"max": "deepseek-reasoner", "pro": "deepseek-chat", "lite": "deepseek-chat"}
     image_model: str = ""  # Image generation model for this provider
     vision_model: str = ""  # Vision/image understanding model for this provider
     enable_thinking: bool = False  # Enable thinking/reasoning mode (e.g. Kimi, DeepSeek)
 
     def __post_init__(self):
         if not self.default_model and self.tier_models:
-            # Pick from tier_models in priority order: pro > flash > max
-            for tier_key in ("pro", "flash", "max"):
+            # Pick from tier_models in priority order: pro > lite > max
+            for tier_key in ("pro", "lite", "max"):
                 if tier_key in self.tier_models:
                     self.default_model = self.tier_models[tier_key]
                     break

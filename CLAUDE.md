@@ -222,8 +222,8 @@ Skills are LangGraph subgraphs invoked as tools using `invoke_skill` and `list_s
 **LLM Providers:**
 - Built-in: Anthropic, OpenAI, Gemini
 - Custom: Any OpenAI-compatible API (DeepSeek, Kimi, Qwen, MiniMax, Ollama, etc.) via `CUSTOM_PROVIDERS` env var
-- Three-tier model routing: MAX (best quality), PRO (balanced), FLASH (fast/cheap)
-- Per-tier provider overrides: `MAX_MODEL_PROVIDER`, `PRO_MODEL_PROVIDER`, `FLASH_MODEL_PROVIDER`
+- Three-tier model routing: MAX (best quality), PRO (balanced), LITE (fast/cheap)
+- Per-tier provider overrides: `MAX_MODEL_PROVIDER`, `PRO_MODEL_PROVIDER`, `LITE_MODEL_PROVIDER`
 - Thinking mode: `ThinkingAwareChatOpenAI` in `backend/app/ai/thinking.py` handles `reasoning_content` for thinking-mode providers
 
 **Sandbox Providers:**

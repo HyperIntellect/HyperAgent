@@ -5,12 +5,16 @@ viewing output, and controlling process lifecycle within sandboxes.
 """
 
 import asyncio
+import datetime
 import json
+import os
+import time
 import uuid
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from app.agents import events
 from app.core.logging import get_logger
 from app.sandbox.execution_sandbox_manager import get_execution_sandbox_manager
 
@@ -90,12 +94,110 @@ class ShellKillInput(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Commands that are read-only and unlikely to modify the filesystem
+_READ_ONLY_PREFIXES = (
+    "cat", "ls", "echo", "grep", "find", "head", "tail", "pwd", "whoami",
+    "which", "wc", "du", "df", "env", "printenv", "date", "uptime", "ps",
+    "top", "free", "uname", "id", "hostname", "file", "stat", "type",
+    "man", "help", "less", "more", "diff", "sort", "uniq", "tr", "tee",
+)
 
-async def _get_sandbox_runtime(user_id: str | None, task_id: str | None):
-    """Get sandbox runtime, creating session if needed."""
+
+def _is_read_only_command(command: str) -> bool:
+    """Heuristic check if a command is read-only."""
+    first_token = command.strip().split()[0] if command.strip() else ""
+    return first_token in _READ_ONLY_PREFIXES
+
+
+def _build_terminal_events(
+    command: str,
+    stdout: str | None = None,
+    stderr: str | None = None,
+    exit_code: int = 0,
+    cwd: str = "/home/user",
+) -> list[dict]:
+    """Build terminal event dicts to embed in tool results."""
+    ts = int(time.time() * 1000)
+    terminal_events: list[dict] = []
+
+    terminal_events.append({
+        "type": "terminal_command",
+        "command": command,
+        "cwd": cwd,
+        "timestamp": ts,
+    })
+
+    if stdout:
+        terminal_events.append({
+            "type": "terminal_output",
+            "content": stdout[:5000],
+            "stream": "stdout",
+            "timestamp": ts,
+        })
+
+    if stderr:
+        terminal_events.append({
+            "type": "terminal_error",
+            "content": stderr[:5000],
+            "exit_code": exit_code,
+            "timestamp": ts,
+        })
+
+    terminal_events.append({
+        "type": "terminal_complete",
+        "exit_code": exit_code,
+        "timestamp": ts,
+    })
+
+    return terminal_events
+
+
+async def _detect_workspace_changes(
+    runtime,
+    pre_exec_time: float,
+    sandbox_id: str,
+) -> list[dict]:
+    """Detect files modified after pre_exec_time via find command."""
+    try:
+        dt = datetime.datetime.fromtimestamp(
+            pre_exec_time, tz=datetime.timezone.utc,
+        )
+        ts_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        find_cmd = (
+            f'find /home/user -maxdepth 4 -type f -newermt "{ts_str}" '
+            '-not -path "*/node_modules/*" '
+            '-not -path "*/__pycache__/*" '
+            '-not -path "*/.git/*" '
+            '-not -path "*/.cache/*" '
+            '2>/dev/null | head -20'
+        )
+        result = await runtime.run_command(find_cmd, timeout=10)
+        if not result.stdout:
+            return []
+
+        ws_events = []
+        for line in result.stdout.strip().splitlines():
+            path = line.strip()
+            if not path:
+                continue
+            ws_events.append(events.workspace_update(
+                operation="modify",
+                path=path,
+                name=os.path.basename(path),
+                sandbox_type="execution",
+                sandbox_id=sandbox_id,
+            ))
+        return ws_events
+    except Exception:
+        return []
+
+
+async def _get_sandbox_runtime_and_session(user_id: str | None, task_id: str | None):
+    """Get sandbox runtime and session, creating if needed."""
     manager = get_execution_sandbox_manager()
     session = await manager.get_or_create_sandbox(user_id=user_id, task_id=task_id)
-    return session.executor.get_runtime()
+    return session.executor.get_runtime(), session
 
 
 async def _run_background_command(runtime, command: str, session_id: str) -> None:
@@ -138,10 +240,18 @@ async def shell_exec(
     logger.info("shell_exec_invoked", command=command[:200], background=background)
 
     try:
-        runtime = await _get_sandbox_runtime(user_id, task_id)
+        runtime, session = await _get_sandbox_runtime_and_session(user_id, task_id)
+        sandbox_id = session.sandbox_id or task_id or user_id or "exec-sandbox"
     except Exception as e:
         logger.error("shell_exec_sandbox_error", error=str(e))
-        return json.dumps({"success": False, "error": f"Sandbox unavailable: {e}"})
+        terminal_events = _build_terminal_events(
+            command=command, stderr=str(e), exit_code=1,
+        )
+        return json.dumps({
+            "success": False,
+            "error": f"Sandbox unavailable: {e}",
+            "terminal_events": terminal_events,
+        })
 
     if background:
         sid = session_id or f"shell_{uuid.uuid4().hex[:8]}"
@@ -155,29 +265,66 @@ async def shell_exec(
         task = asyncio.create_task(_run_background_command(runtime, command, sid))
         _background_sessions[sid]["task"] = task
         logger.info("shell_exec_background_started", session_id=sid)
+        # Emit a single terminal_command event (no output yet)
+        terminal_events = [{
+            "type": "terminal_command",
+            "command": command,
+            "cwd": "/home/user",
+            "timestamp": int(time.time() * 1000),
+        }]
         return json.dumps({
             "success": True,
             "session_id": sid,
             "message": f"Background process started. Use shell_view('{sid}') to check output.",
+            "terminal_events": terminal_events,
         })
 
     # Synchronous execution
     try:
+        pre_exec_time = time.time()
         result = await runtime.run_command(command, timeout=timeout)
         logger.info(
             "shell_exec_completed",
             exit_code=result.exit_code,
             stdout_len=len(result.stdout or ""),
         )
+
+        stdout = (result.stdout or "")[:10000]
+        stderr = (result.stderr or "")[:5000]
+        exit_code = result.exit_code
+
+        terminal_events = _build_terminal_events(
+            command=command,
+            stdout=stdout,
+            stderr=stderr if exit_code != 0 else None,
+            exit_code=exit_code,
+        )
+
+        # Detect workspace changes for non-read-only commands
+        workspace_events = []
+        if not _is_read_only_command(command):
+            workspace_events = await _detect_workspace_changes(
+                runtime, pre_exec_time, sandbox_id,
+            )
+
         return json.dumps({
             "success": True,
-            "exit_code": result.exit_code,
-            "stdout": (result.stdout or "")[:10000],
-            "stderr": (result.stderr or "")[:5000],
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "terminal_events": terminal_events,
+            "workspace_events": workspace_events,
         })
     except Exception as e:
         logger.error("shell_exec_failed", error=str(e))
-        return json.dumps({"success": False, "error": str(e)})
+        terminal_events = _build_terminal_events(
+            command=command, stderr=str(e), exit_code=1,
+        )
+        return json.dumps({
+            "success": False,
+            "error": str(e),
+            "terminal_events": terminal_events,
+        })
 
 
 @tool(args_schema=ShellViewInput)

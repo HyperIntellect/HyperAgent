@@ -93,7 +93,11 @@ async def get_file_context(
     attachment_ids: list[str],
     user_id: str,
 ) -> str:
-    """Get extracted text from attached files for LLM context."""
+    """Get extracted text from attached files for LLM context.
+
+    Includes sandbox paths so the LLM knows where files are available
+    for code execution (uploaded to /home/user/ in the sandbox).
+    """
     if not attachment_ids:
         return ""
 
@@ -107,13 +111,21 @@ async def get_file_context(
 
     context_parts = []
     for file in files:
+        # Build sandbox path matching _safe_filename in data_analysis_skill
+        safe_name = f"{file.id}_{file.original_filename.rsplit('/', 1)[-1] or 'file'}"
+        sandbox_path = f"/home/user/{safe_name}"
+
         if file.extracted_text:
             context_parts.append(
-                f"[Attached file: {file.original_filename}]\n{file.extracted_text}\n"
+                f"[Attached file: {file.original_filename}]\n"
+                f"Sandbox path: {sandbox_path}\n"
+                f"{file.extracted_text}\n"
             )
         else:
             context_parts.append(
-                f"[Attached file: {file.original_filename} - binary content not extracted]\n"
+                f"[Attached file: {file.original_filename}"
+                f" - binary content, use sandbox path for analysis]\n"
+                f"Sandbox path: {sandbox_path}\n"
             )
 
     if context_parts:

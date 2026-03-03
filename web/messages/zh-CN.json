@@ -5,7 +5,7 @@
     },
     "sidebar": {
         "create": "新建",
-        "recentTasks": "最近任务",
+        "recentTasks": "所有任务",
         "lightMode": "浅色模式",
         "darkMode": "深色模式",
         "theme": "主题",
@@ -36,8 +36,10 @@
         "slide": "演示文稿",
         "noResults": "没有找到项目",
         "chatDescription": "快速提问与对话",
-        "skills": "技能",
+        "skills": "探索技能",
+        "library": "资料库",
         "projects": "项目",
+        "newProject": "新建项目",
         "researchDescription": "深度分析与报告",
         "progress": {
             "processing": "处理中",
@@ -51,6 +53,7 @@
             "collapse": "收起",
             "defaultTool": "工具",
             "sourcesCount": "{count, plural, =1 {1 个来源} other {# 个来源}}",
+            "moreSources": "+{count} 个更多来源",
             "liveBrowser": "实时浏览器",
             "browserView": "浏览器视图",
             "close": "关闭",
@@ -242,7 +245,8 @@
                 "browser_get_stream_url": "浏览器直播",
                 "computer_use": "计算机使用",
                 "computer_bash": "计算机终端",
-                "skill_web_research": "网络研究",
+                "skill_web_research": "智能搜索",
+                "skill_deep_research": "深度研究",
                 "skill_code_review": "代码审查",
                 "skill_code_generation": "代码生成",
                 "skill_image_generation": "图片生成",
@@ -454,6 +458,11 @@
                     "completed": "桌面控制已就绪",
                     "failed": "桌面控制失败"
                 },
+                "context": {
+                    "running": "正在加载上下文...",
+                    "completed": "上下文已加载",
+                    "failed": "上下文加载失败"
+                },
                 "processing": {
                     "running": "处理中...",
                     "completed": "处理完成",
@@ -469,6 +478,71 @@
                     "running": "启动开发服务器...",
                     "completed": "服务器已启动",
                     "failed": "服务器启动失败"
+                },
+                "init_config": {
+                    "running": "初始化研究...",
+                    "completed": "研究已初始化",
+                    "failed": "初始化失败"
+                },
+                "react_loop": {
+                    "running": "推理中...",
+                    "completed": "推理完成",
+                    "failed": "推理失败"
+                },
+                "execute_tools": {
+                    "running": "执行工具...",
+                    "completed": "工具已执行",
+                    "failed": "工具执行失败"
+                },
+                "classifying": {
+                    "running": "分析查询复杂度...",
+                    "completed": "查询已分类",
+                    "failed": "分类失败"
+                },
+                "searching": {
+                    "running": "搜索中...",
+                    "completed": "搜索完成",
+                    "failed": "搜索失败"
+                },
+                "planning": {
+                    "running": "分解为子查询...",
+                    "completed": "搜索计划就绪",
+                    "failed": "规划失败"
+                },
+                "evaluating": {
+                    "running": "评估覆盖率...",
+                    "completed": "评估完成",
+                    "failed": "评估失败"
+                },
+                "synthesizing": {
+                    "running": "综合分析结果...",
+                    "completed": "综合完成",
+                    "failed": "综合失败"
+                },
+                "classify": {
+                    "running": "分析查询...",
+                    "completed": "查询已分析",
+                    "failed": "分析失败"
+                },
+                "quick_search": {
+                    "running": "快速搜索...",
+                    "completed": "快速搜索完成",
+                    "failed": "快速搜索失败"
+                },
+                "plan_search": {
+                    "running": "规划搜索策略...",
+                    "completed": "搜索计划就绪",
+                    "failed": "搜索规划失败"
+                },
+                "execute_search": {
+                    "running": "并行搜索中...",
+                    "completed": "搜索完成",
+                    "failed": "搜索执行失败"
+                },
+                "evaluate": {
+                    "running": "评估结果...",
+                    "completed": "评估完成",
+                    "failed": "评估失败"
                 },
                 "default": {
                     "running": "处理中...",
@@ -510,6 +584,12 @@
         "outputTokens": "输出 Token",
         "cachedTokens": "缓存 Token",
         "byTier": "按层级",
+        "skillSelector": {
+            "label": "技能",
+            "auto": "自动",
+            "autoDescription": "由智能体决定使用哪些技能",
+            "selectSkill": "选择技能..."
+        },
         "voice": {
             "startRecording": "开始语音输入",
             "stopRecording": "停止录音",
@@ -569,12 +649,10 @@
     },
     "settings": {
         "modelTier": "模型等级",
-        "autoTier": "自动",
         "tierDescription": {
-            "auto": "系统根据任务自动选择",
-            "max": "复杂推理与研究",
-            "pro": "平衡通用任务",
-            "flash": "快速响应"
+            "max": "最佳质量，深度搜索，更多迭代",
+            "pro": "平衡质量与速度",
+            "lite": "快速响应，基础搜索"
         }
     },
     "preferences": {
@@ -619,6 +697,7 @@
         "approvalCodeExecution": "智能体想要在沙箱环境中执行代码。",
         "approvalFileModify": "智能体想要修改文件：\n\n**{path}**",
         "approvalFileDelete": "智能体想要删除文件：\n\n**{path}**",
+        "approvalSkillInvocation": "智能体想要使用 **{skillName}** 技能。",
         "approvalGenericTool": "智能体想要使用 **{toolName}**。"
     },
     "appPreview": {
@@ -689,7 +768,81 @@
         "saveSuccess": "修改已保存",
         "saveError": "保存失败",
         "builtinSkill": "内置技能",
-        "loadingEditor": "加载编辑器..."
+        "loadingEditor": "加载编辑器...",
+        "loading": "加载中...",
+        "loadingSkills": "正在加载技能...",
+        "notFound": "未找到技能",
+        "builtin": {
+            "web_research": {
+                "name": "智能搜索",
+                "description": "统一网络研究技能，支持分层执行：快速搜索、智能分类或完整智能管道"
+            },
+            "data_analysis": {
+                "name": "数据分析",
+                "description": "包含规划、代码执行和可视化的完整数据分析"
+            },
+            "image_generation": {
+                "name": "图像生成",
+                "description": "使用 AI 根据文字描述生成高质量图像"
+            },
+            "code_generation": {
+                "name": "代码生成",
+                "description": "生成结构良好的代码片段、函数或程序"
+            },
+            "task_planning": {
+                "name": "任务规划",
+                "description": "分析复杂任务并创建结构化执行计划"
+            },
+            "app_builder": {
+                "name": "应用构建",
+                "description": "构建并运行具有实时预览的网页应用"
+            },
+            "slide_generation": {
+                "name": "幻灯片生成",
+                "description": "创建专业的 PPTX 演示文稿"
+            },
+            "deep_research": {
+                "name": "深度研究",
+                "description": "多步骤深度研究，包含网络搜索、分析和综合报告"
+            }
+        },
+        "templates": {
+            "web_research": {
+                "name": "网络研究",
+                "description": "搜索网络并总结发现的技能"
+            },
+            "code_generation": {
+                "name": "代码生成",
+                "description": "根据提示生成代码的技能"
+            },
+            "data_processing": {
+                "name": "数据处理",
+                "description": "处理和分析数据的技能"
+            },
+            "custom": {
+                "name": "自定义（空白）",
+                "description": "从零开始，使用最小技能模板"
+            }
+        }
+    },
+    "library": {
+        "title": "资料库",
+        "subtitle": "浏览所有上传和生成的文件",
+        "search": "搜索文件...",
+        "allCategories": "全部",
+        "images": "图片",
+        "documents": "文档",
+        "slides": "演示文稿",
+        "code": "代码",
+        "data": "数据",
+        "fileCount": "{count, plural, =0 {暂无文件} other {# 个文件}}",
+        "noResults": "没有找到匹配的文件",
+        "noFiles": "暂无文件",
+        "noFilesDescription": "上传或生成的文件将显示在这里",
+        "download": "下载",
+        "delete": "删除",
+        "loadError": "加载文件失败",
+        "retry": "重试"
     },
     "projects": {
         "title": "项目",
@@ -716,6 +869,16 @@
         "removeFromProject": "移除",
         "noConversations": "此项目中暂无对话",
         "noTasks": "此项目中暂无研究任务",
+        "items": "内容",
+        "itemCount": "{count, plural, =0 {暂无内容} other {# 项内容}}",
+        "noItems": "此项目中暂无内容",
+        "justNow": "刚刚",
+        "minutesAgo": "{minutes}分钟前",
+        "hoursAgo": "{hours}小时前",
+        "daysAgo": "{days}天前",
+        "conversationsSection": "对话",
+        "tasksSection": "研究任务",
+        "selectItemsDescription": "选择要添加的对话和任务",
         "loadError": "加载项目失败",
         "retry": "重试",
         "cancel": "取消",
@@ -737,7 +900,13 @@
         "collapse": "折叠",
         "expand": "展开",
         "terminalOutput": "终端输出",
+        "scrollToBottom": "滚动到底部",
         "errorMessage": "计算机面板中发生了意外错误。",
+        "activityUsing": "HyperAgent 正在使用",
+        "activityIdle": "空闲",
+        "executingCommand": "正在执行命令",
+        "expandSteps": "展开步骤",
+        "collapseSteps": "收起步骤",
         "live": "实时",
         "previousStep": "上一步",
         "nextStep": "下一步",
@@ -754,6 +923,7 @@
         "browserLive": "实时",
         "browserExitFullscreen": "退出全屏",
         "emptyDirectory": "此目录为空",
+        "terminalPrompt": "ubuntu@sandbox",
         "noTerminalOutput": "暂无终端输出",
         "copyCommand": "复制命令",
         "copied": "已复制",
@@ -828,6 +998,8 @@
             "preview": "预览",
             "download": "下载",
             "noPreview": "无法预览此文件类型",
+            "raw": "原始内容",
+            "failedToLoad": "加载文件失败",
             "selectFile": "选择文件以预览",
             "searchPlaceholder": "筛选文件...",
             "noResults": "没有匹配的文件",
@@ -839,7 +1011,12 @@
             "updated": "已更新",
             "fileUpdated": "此文件最近已更新",
             "reload": "重新加载"
-        }
+        },
+        "externalFiles": "附件与生成",
+        "workspaceFiles": "工作区",
+        "sourceUpload": "上传",
+        "sourceGenerated": "生成",
+        "sourceSlide": "幻灯片"
     },
     "taskPlan": {
         "executionPlan": "执行计划",

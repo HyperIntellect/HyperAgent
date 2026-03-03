@@ -88,7 +88,9 @@ class E2BRuntime:
 
         # Read the archive as bytes
         data = await self.read_file(archive_path, format="bytes")
-        if not isinstance(data, bytes):
+        if isinstance(data, (bytes, bytearray)):
+            data = bytes(data)
+        else:
             data = data.encode("utf-8")
 
         # Clean up the temp archive

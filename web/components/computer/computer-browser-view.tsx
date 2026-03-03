@@ -4,9 +4,6 @@ import React, { useState, useCallback, useRef } from "react";
 import {
     Monitor,
     Globe,
-    ArrowLeft,
-    ArrowRight,
-    RotateCw,
     Maximize2,
     Minimize2,
     ExternalLink,
@@ -63,7 +60,7 @@ export function ComputerBrowserView({
     });
     const isLive = useComputerStore((state) => {
         const id = state.activeConversationId;
-        return id ? state.conversationStates[id]?.isLive ?? true : true;
+        return id ? state.conversationStates[id]?.isLive ?? false : false;
     });
 
     const [isFullscreen, setIsFullscreen] = useState(false);
@@ -87,7 +84,7 @@ export function ComputerBrowserView({
         [stream]
     );
 
-    const handleScreenshot = useCallback(() => {
+    const handleOpenInNewTab = useCallback(() => {
         if (stream?.streamUrl) {
             window.open(stream.streamUrl, '_blank', 'noopener,noreferrer');
         }
@@ -108,12 +105,6 @@ export function ComputerBrowserView({
         );
     }
 
-    // Extract click coordinates from action if available (may be present in extended action data)
-    const actionData = visibleAction as Record<string, unknown> | null;
-    const clickCoords = actionData && typeof actionData.x === "number" && typeof actionData.y === "number"
-        ? { x: actionData.x as number, y: actionData.y as number }
-        : undefined;
-
     // Action overlay toast
     const actionOverlay = visibleAction ? (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 max-w-[80%]">
@@ -129,18 +120,6 @@ export function ComputerBrowserView({
                 </span>
             </div>
         </div>
-    ) : null;
-
-    // Click position indicator
-    const clickIndicator = visibleAction && clickCoords ? (
-        <div
-            className="absolute z-10 bg-primary/30 rounded-full w-8 h-8 pointer-events-none animate-ping"
-            style={{
-                left: `${clickCoords.x}%`,
-                top: `${clickCoords.y}%`,
-                transform: "translate(-50%, -50%)",
-            }}
-        />
     ) : null;
 
     // Use a single container with CSS-based fullscreen toggle to avoid
@@ -160,48 +139,6 @@ export function ComputerBrowserView({
                     ? "px-3 bg-card/95 backdrop-blur-sm border-border"
                     : "bg-secondary/50 border-border/30"
             )}>
-                {/* Navigation buttons */}
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                        "h-8 w-8 cursor-default opacity-50",
-                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
-                        isFullscreen ? "text-muted-foreground/60" : "text-muted-foreground/50"
-                    )}
-                    disabled
-                    title={t("browserBack")}
-                >
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                        "h-8 w-8 cursor-default opacity-50",
-                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
-                        isFullscreen ? "text-muted-foreground/60" : "text-muted-foreground/50"
-                    )}
-                    disabled
-                    title={t("browserForward")}
-                >
-                    <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                        "h-8 w-8 cursor-default opacity-50",
-                        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
-                        isFullscreen ? "text-muted-foreground/60" : "text-muted-foreground/50",
-                        browserIsNavigating && "animate-spin"
-                    )}
-                    disabled
-                    title={t("browserRefresh")}
-                >
-                    <RotateCw className="w-3.5 h-3.5" />
-                </Button>
-
                 {/* URL bar */}
                 <div className={cn(
                     "flex-1 flex items-center gap-1.5 h-7 px-2.5 rounded-lg min-w-0 transition-colors",
@@ -252,7 +189,7 @@ export function ComputerBrowserView({
                         "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
                         isFullscreen && "text-foreground hover:bg-accent"
                     )}
-                    onClick={handleScreenshot}
+                    onClick={handleOpenInNewTab}
                     title={t("openInNewTab")}
                     aria-label={t("openInNewTab")}
                 >
@@ -292,13 +229,12 @@ export function ComputerBrowserView({
                     src={stream.streamUrl}
                     className="w-full h-full border-0"
                     style={{ display: "block" }}
-                    sandbox="allow-scripts allow-popups allow-pointer-lock"
+                    sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-pointer-lock"
                     allow="autoplay; fullscreen"
                     referrerPolicy="no-referrer"
                     onLoad={() => handleIframeLoad(iframeRef)}
                     title={t("browserIframeTitle")}
                 />
-                {clickIndicator}
                 {actionOverlay}
             </div>
         </div>

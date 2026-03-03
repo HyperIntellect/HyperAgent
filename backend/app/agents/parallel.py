@@ -146,7 +146,7 @@ async def decompose_query(
     Returns:
         List of SubTask objects
     """
-    llm = llm_service.get_llm_for_tier(ModelTier.FLASH, provider=provider)
+    llm = llm_service.get_llm_for_tier(ModelTier.LITE, provider=provider)
 
     try:
         async with asyncio.timeout(DECOMPOSITION_TIMEOUT):
@@ -419,7 +419,7 @@ async def decompose_general_task(
     Returns:
         List of SubTask objects with task_type="general"
     """
-    llm = llm_service.get_llm_for_tier(ModelTier.FLASH, provider=provider)
+    llm = llm_service.get_llm_for_tier(ModelTier.LITE, provider=provider)
 
     try:
         async with asyncio.timeout(DECOMPOSITION_TIMEOUT):

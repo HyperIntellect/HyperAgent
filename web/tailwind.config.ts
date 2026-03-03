@@ -83,6 +83,20 @@ const config: Config = {
         success: "hsl(var(--success) / <alpha-value>)",
         warning: "hsl(var(--warning) / <alpha-value>)",
         info: "hsl(var(--info) / <alpha-value>)",
+        // Terminal colors (HSL)
+        terminal: {
+          bg: "hsl(var(--terminal-bg) / <alpha-value>)",
+          fg: "hsl(var(--terminal-fg) / <alpha-value>)",
+          prompt: "hsl(var(--terminal-prompt) / <alpha-value>)",
+          command: "hsl(var(--terminal-command) / <alpha-value>)",
+          error: "hsl(var(--terminal-error) / <alpha-value>)",
+          output: "hsl(var(--terminal-output) / <alpha-value>)",
+          tool: "hsl(var(--terminal-tool) / <alpha-value>)",
+          skill: "hsl(var(--terminal-skill) / <alpha-value>)",
+          browser: "hsl(var(--terminal-browser) / <alpha-value>)",
+          border: "hsl(var(--terminal-border) / <alpha-value>)",
+          "input-bg": "hsl(var(--terminal-input-bg) / <alpha-value>)",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

@@ -5,7 +5,7 @@
     },
     "sidebar": {
         "create": "New",
-        "recentTasks": "Recent Tasks",
+        "recentTasks": "All Tasks",
         "lightMode": "Light mode",
         "darkMode": "Dark mode",
         "theme": "Theme",
@@ -36,8 +36,10 @@
         "slide": "Slides",
         "noResults": "No items found",
         "chatDescription": "Quick questions & conversations",
-        "skills": "Skills",
+        "skills": "Explorer Skills",
+        "library": "Library",
         "projects": "Projects",
+        "newProject": "New Project",
         "researchDescription": "In-depth analysis & reports",
         "progress": {
             "processing": "Processing",
@@ -51,6 +53,7 @@
             "collapse": "Collapse",
             "defaultTool": "Tool",
             "sourcesCount": "{count, plural, =1 {1 source} other {# sources}}",
+            "moreSources": "+{count} more sources",
             "liveBrowser": "Live Browser",
             "browserView": "Browser View",
             "close": "Close",
@@ -242,7 +245,8 @@
                 "browser_get_stream_url": "Browser Stream",
                 "computer_use": "Computer Use",
                 "computer_bash": "Computer Bash",
-                "skill_web_research": "Web Research",
+                "skill_web_research": "Agentic Search",
+                "skill_deep_research": "Deep Research",
                 "skill_code_review": "Code Review",
                 "skill_code_generation": "Code Generation",
                 "skill_image_generation": "Image Generation",
@@ -454,6 +458,11 @@
                     "completed": "Desktop control ready",
                     "failed": "Desktop control failed"
                 },
+                "context": {
+                    "running": "Loading context...",
+                    "completed": "Context loaded",
+                    "failed": "Context loading failed"
+                },
                 "processing": {
                     "running": "Processing...",
                     "completed": "Processing complete",
@@ -469,6 +478,71 @@
                     "running": "Starting development server...",
                     "completed": "Server started",
                     "failed": "Server start failed"
+                },
+                "init_config": {
+                    "running": "Initializing research...",
+                    "completed": "Research initialized",
+                    "failed": "Initialization failed"
+                },
+                "react_loop": {
+                    "running": "Reasoning...",
+                    "completed": "Reasoning complete",
+                    "failed": "Reasoning failed"
+                },
+                "execute_tools": {
+                    "running": "Executing tools...",
+                    "completed": "Tools executed",
+                    "failed": "Tool execution failed"
+                },
+                "classifying": {
+                    "running": "Analyzing query complexity...",
+                    "completed": "Query classified",
+                    "failed": "Classification failed"
+                },
+                "searching": {
+                    "running": "Searching the web...",
+                    "completed": "Search complete",
+                    "failed": "Search failed"
+                },
+                "planning": {
+                    "running": "Decomposing into sub-queries...",
+                    "completed": "Search plan ready",
+                    "failed": "Planning failed"
+                },
+                "evaluating": {
+                    "running": "Evaluating coverage...",
+                    "completed": "Evaluation complete",
+                    "failed": "Evaluation failed"
+                },
+                "synthesizing": {
+                    "running": "Synthesizing findings...",
+                    "completed": "Synthesis complete",
+                    "failed": "Synthesis failed"
+                },
+                "classify": {
+                    "running": "Analyzing query...",
+                    "completed": "Query analyzed",
+                    "failed": "Analysis failed"
+                },
+                "quick_search": {
+                    "running": "Quick search...",
+                    "completed": "Quick search complete",
+                    "failed": "Quick search failed"
+                },
+                "plan_search": {
+                    "running": "Planning search strategy...",
+                    "completed": "Search plan ready",
+                    "failed": "Search planning failed"
+                },
+                "execute_search": {
+                    "running": "Searching in parallel...",
+                    "completed": "Searches complete",
+                    "failed": "Search execution failed"
+                },
+                "evaluate": {
+                    "running": "Evaluating results...",
+                    "completed": "Evaluation complete",
+                    "failed": "Evaluation failed"
                 },
                 "default": {
                     "running": "Processing...",
@@ -510,6 +584,12 @@
         "outputTokens": "Output tokens",
         "cachedTokens": "Cached tokens",
         "byTier": "By tier",
+        "skillSelector": {
+            "label": "Skill",
+            "auto": "Auto",
+            "autoDescription": "Agent decides which skills to use",
+            "selectSkill": "Select a skill..."
+        },
         "voice": {
             "startRecording": "Start voice input",
             "stopRecording": "Stop recording",
@@ -569,12 +649,10 @@
     },
     "settings": {
         "modelTier": "Model Tier",
-        "autoTier": "Auto",
         "tierDescription": {
-            "auto": "System selects based on task",
-            "max": "Complex reasoning & research",
-            "pro": "Balanced general tasks",
-            "flash": "Quick responses"
+            "max": "Best quality, deep search, more iterations",
+            "pro": "Balanced quality & speed",
+            "lite": "Fast responses, basic search"
         }
     },
     "preferences": {
@@ -619,6 +697,7 @@
         "approvalCodeExecution": "The agent wants to execute code in a sandboxed environment.",
         "approvalFileModify": "The agent wants to modify the file:\n\n**{path}**",
         "approvalFileDelete": "The agent wants to delete the file:\n\n**{path}**",
+        "approvalSkillInvocation": "The agent wants to use the **{skillName}** skill.",
         "approvalGenericTool": "The agent wants to use **{toolName}**."
     },
     "appPreview": {
@@ -689,7 +768,81 @@
         "saveSuccess": "Changes saved",
         "saveError": "Failed to save changes",
         "builtinSkill": "Built-in Skill",
-        "loadingEditor": "Loading editor..."
+        "loadingEditor": "Loading editor...",
+        "loading": "Loading...",
+        "loadingSkills": "Loading skills...",
+        "notFound": "Skill not found",
+        "builtin": {
+            "web_research": {
+                "name": "Agentic Search",
+                "description": "Unified web research with tier-aware execution: fast search, smart classification, or full agentic pipeline"
+            },
+            "data_analysis": {
+                "name": "Data Analysis",
+                "description": "Full data analysis with planning, code execution, and visualization"
+            },
+            "image_generation": {
+                "name": "Image Generation",
+                "description": "Generates high-quality images from text descriptions using AI"
+            },
+            "code_generation": {
+                "name": "Code Generation",
+                "description": "Generates well-structured code snippets, functions, or programs"
+            },
+            "task_planning": {
+                "name": "Task Planning",
+                "description": "Analyzes complex tasks and creates structured execution plans"
+            },
+            "app_builder": {
+                "name": "App Builder",
+                "description": "Builds and runs web applications with live preview"
+            },
+            "slide_generation": {
+                "name": "Slide Generation",
+                "description": "Creates professional PPTX presentations"
+            },
+            "deep_research": {
+                "name": "Deep Research",
+                "description": "Multi-step deep research with web search, analysis, and comprehensive reports"
+            }
+        },
+        "templates": {
+            "web_research": {
+                "name": "Web Research",
+                "description": "A skill that searches the web and summarizes findings"
+            },
+            "code_generation": {
+                "name": "Code Generation",
+                "description": "A skill that generates code based on a prompt"
+            },
+            "data_processing": {
+                "name": "Data Processing",
+                "description": "A skill that processes and analyzes data"
+            },
+            "custom": {
+                "name": "Custom (Blank)",
+                "description": "Start from scratch with a minimal skill template"
+            }
+        }
+    },
+    "library": {
+        "title": "Library",
+        "subtitle": "Browse all your uploaded and generated files",
+        "search": "Search files...",
+        "allCategories": "All",
+        "images": "Images",
+        "documents": "Documents",
+        "slides": "Slides",
+        "code": "Code",
+        "data": "Data",
+        "fileCount": "{count, plural, =0 {No files} =1 {1 file} other {# files}}",
+        "noResults": "No files found matching your criteria",
+        "noFiles": "No files yet",
+        "noFilesDescription": "Files will appear here when you upload or generate them",
+        "download": "Download",
+        "delete": "Delete",
+        "loadError": "Failed to load files",
+        "retry": "Retry"
     },
     "projects": {
         "title": "Projects",
@@ -716,6 +869,16 @@
         "removeFromProject": "Remove",
         "noConversations": "No conversations in this project",
         "noTasks": "No research tasks in this project",
+        "items": "Items",
+        "itemCount": "{count, plural, =0 {No items} =1 {1 item} other {# items}}",
+        "noItems": "No items in this project yet",
+        "justNow": "Just now",
+        "minutesAgo": "{minutes}m ago",
+        "hoursAgo": "{hours}h ago",
+        "daysAgo": "{days}d ago",
+        "conversationsSection": "Conversations",
+        "tasksSection": "Research Tasks",
+        "selectItemsDescription": "Select conversations and tasks to add",
         "loadError": "Failed to load projects",
         "retry": "Retry",
         "cancel": "Cancel",
@@ -737,7 +900,13 @@
         "collapse": "Collapse",
         "expand": "Expand",
         "terminalOutput": "Terminal output",
+        "scrollToBottom": "Scroll to bottom",
         "errorMessage": "An unexpected error occurred in the computer panel.",
+        "activityUsing": "HyperAgent is using",
+        "activityIdle": "Idle",
+        "executingCommand": "Executing command",
+        "expandSteps": "Expand steps",
+        "collapseSteps": "Collapse steps",
         "live": "live",
         "previousStep": "Previous step",
         "nextStep": "Next step",
@@ -754,6 +923,7 @@
         "browserLive": "Live",
         "browserExitFullscreen": "Exit fullscreen",
         "emptyDirectory": "This directory is empty",
+        "terminalPrompt": "ubuntu@sandbox",
         "noTerminalOutput": "No terminal output yet",
         "copyCommand": "Copy command",
         "copied": "Copied",
@@ -828,6 +998,8 @@
             "preview": "Preview",
             "download": "Download",
             "noPreview": "Preview not available for this file type",
+            "raw": "Raw",
+            "failedToLoad": "Failed to load file",
             "selectFile": "Select a file to preview",
             "searchPlaceholder": "Filter files...",
             "noResults": "No matching files",
@@ -839,7 +1011,12 @@
             "updated": "updated",
             "fileUpdated": "This file was recently updated",
             "reload": "Reload"
-        }
+        },
+        "externalFiles": "Attached & Generated",
+        "workspaceFiles": "Workspace",
+        "sourceUpload": "Upload",
+        "sourceGenerated": "Generated",
+        "sourceSlide": "Slide"
     },
     "taskPlan": {
         "executionPlan": "Execution Plan",

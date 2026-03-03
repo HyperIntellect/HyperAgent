@@ -12,12 +12,10 @@ from app.agents.routing import route_query
 from app.agents.state import (
     AgentType,
     ErrorOutput,
-    ResearchPostOutput,
     RouterOutput,
     SupervisorState,
     TaskOutput,
 )
-from app.agents.subagents.research import research_subgraph
 from app.agents.subagents.task import task_subgraph
 from app.agents.tools.handoff import (
     HANDOFF_MATRIX,
@@ -166,13 +164,16 @@ async def task_node(state: SupervisorState, config: dict | None = None) -> TaskO
             and (state.get("mode") in (None, "task"))
         ):
             from app.agents.parallel import GeneralParallelExecutor
+            from app.ai.model_tiers import get_quality_profile
 
             parallel_events: list[dict] = []
 
             def _on_progress(evt: dict):
                 parallel_events.append(evt)
 
-            executor = GeneralParallelExecutor(max_agents=settings.parallel_executor_max_agents)
+            profile = get_quality_profile(state.get("tier"))
+            max_agents = min(profile.parallel_max_agents, settings.parallel_executor_max_agents)
+            executor = GeneralParallelExecutor(max_agents=max_agents)
             result = await executor.execute(
                 query=_build_query_with_context(state),
                 provider=state.get("provider"),
@@ -206,14 +207,17 @@ async def task_node(state: SupervisorState, config: dict | None = None) -> TaskO
             "tier": state.get("tier"),
             "shared_memory": state.get("shared_memory") or {},
             "locale": state.get("locale", "en"),
+            "skills": state.get("skills") or [],
+            "scenario": state.get("scenario"),
+            "depth": state.get("depth"),
         }
 
         # Invoke task subgraph with timeout
         # Pass config so callbacks (dispatch_custom_event) propagate for real-time streaming
         timeout = getattr(settings, "subgraph_timeout", DEFAULT_SUBGRAPH_TIMEOUT)
-        # App builder needs more time (plan + scaffold + N file generations + server start)
+        # App builder and deep research need more time
         mode = state.get("mode")
-        if mode == "app":
+        if mode in ("app", "research"):
             timeout = max(timeout, 600)
         async with asyncio.timeout(timeout):
             result = await task_subgraph.ainvoke(input_state, config=config)
@@ -241,70 +245,6 @@ async def task_node(state: SupervisorState, config: dict | None = None) -> TaskO
             events=[{"type": "error", "node": "task", "error": str(e)}],
             has_error=True,
         )
-
-
-async def research_post_node(state: SupervisorState) -> ResearchPostOutput | ErrorOutput:
-    """Post-process research subgraph results.
-
-    Updates shared memory with research findings and validates handoffs.
-
-    Args:
-        state: Current supervisor state with research results
-
-    Returns:
-        ResearchPostOutput with shared memory updates and validated handoff
-    """
-    try:
-        output: ResearchPostOutput = {}
-
-        # Update shared memory with research findings
-        shared_memory = dict(state.get("shared_memory") or {})
-        if state.get("analysis"):
-            shared_memory["research_findings"] = state.get("analysis", "")
-        if state.get("sources"):
-            sources = state.get("sources", [])
-            shared_memory["research_sources"] = [
-                {"title": s.title, "url": s.url, "snippet": s.snippet}
-                for s in sources
-                if hasattr(s, "title")  # Check if it's a SearchResult object
-            ]
-        output["shared_memory"] = shared_memory
-
-        await _process_handoff(output, state, state.get("pending_handoff"), "research")
-
-        logger.info(
-            "research_post_completed",
-            has_findings=bool(shared_memory.get("research_findings")),
-            has_handoff=bool(state.get("pending_handoff")),
-        )
-
-        return output
-
-    except Exception as e:
-        logger.error("research_post_failed", error=str(e))
-        return ErrorOutput(
-            response="Failed to process research results. Please try again.",
-            events=[{"type": "error", "node": "research_post", "error": str(e)}],
-            has_error=True,
-        )
-
-
-
-def select_agent(state: SupervisorState) -> str:
-    """Select which agent to route to based on state.
-
-    Args:
-        state: Current supervisor state with selected_agent
-
-    Returns:
-        Node name to route to
-    """
-    selected = state.get("selected_agent", AgentType.TASK.value)
-    valid_agents = {a.value for a in AgentType}
-    if selected not in valid_agents:
-        logger.warning("invalid_agent_type_defaulting_to_task", selected=selected)
-        return AgentType.TASK.value
-    return selected
 
 
 def check_for_handoff(state: SupervisorState) -> Literal["router", "__end__"]:
@@ -499,11 +439,10 @@ async def _restore_handoff_artifacts(
 
 
 def create_supervisor_graph(checkpointer=None):
-    """Create the supervisor graph that orchestrates subagents with handoff support.
+    """Create the supervisor graph that orchestrates the task agent.
 
-    The research agent uses a research -> research_post pattern where the
-    research node builds input state with handoff context and invokes the
-    research subgraph, and research_post handles cross-agent state updates.
+    Research is handled as a skill (deep_research) invoked by the task agent,
+    so the supervisor only needs to route to the task node.
 
     Args:
         checkpointer: Optional checkpointer for state persistence
@@ -517,95 +456,21 @@ def create_supervisor_graph(checkpointer=None):
     graph.add_node("router", router_node)
     graph.add_node("task", task_node)
 
-    # Research node: builds input state with handoff context, then invokes subgraph
-    async def research_node(state: SupervisorState):
-        """Prepare input and invoke research subgraph with timeout."""
-        from app.config import settings
-
-        if settings.parallel_executor_v1 and state.get("parallel_eligible"):
-            from app.agents.parallel import ParallelExecutor
-
-            parallel_events: list[dict] = []
-
-            def _on_progress(evt: dict):
-                parallel_events.append(evt)
-
-            executor = ParallelExecutor(max_agents=settings.parallel_executor_max_agents)
-            result = await executor.execute(
-                query=_build_query_with_context(state),
-                provider=state.get("provider"),
-                on_progress=_on_progress,
-            )
-            return {
-                "response": result.synthesis,
-                "analysis": result.synthesis,
-                "events": parallel_events + [{
-                    "type": "reasoning",
-                    "thinking": (
-                        f"Parallel research completed with {result.successful_count} successful "
-                        f"and {result.failed_count} failed sub-queries."
-                    ),
-                    "context": "parallel_execution",
-                }],
-            }
-
-        input_state = {
-            "query": _build_query_with_context(state),
-            "depth": state.get("depth", ResearchDepth.FAST),
-            "scenario": state.get("scenario", ResearchScenario.ACADEMIC),
-            "user_id": state.get("user_id"),
-            "task_id": state.get("task_id"),
-            "provider": state.get("provider"),
-            "model": state.get("model"),
-            "tier": state.get("tier"),
-            "locale": state.get("locale", "en"),
-        }
-
-        timeout = getattr(settings, "subgraph_timeout", DEFAULT_SUBGRAPH_TIMEOUT)
-        try:
-            async with asyncio.timeout(timeout):
-                return await research_subgraph.ainvoke(input_state)
-        except asyncio.TimeoutError:
-            logger.error("research_subgraph_timeout", task_id=state.get("task_id"))
-            return {
-                "response": (
-                    "The research request took too long to process. "
-                    "Please try a narrower topic."
-                ),
-                "events": [{"type": "error", "node": "research", "error": "Timeout"}],
-            }
-
-    graph.add_node("research", research_node)
-    graph.add_node("research_post", research_post_node)
-
     # Set entry point
     graph.set_entry_point("router")
 
-    # Conditional edges from router to appropriate agent
-    # Note: Deprecated agent type (image) is automatically
-    # mapped to CHAT in routing.py via AGENT_NAME_MAP before reaching here
+    # All queries route to task agent (research is now a skill)
+    graph.add_edge("router", "task")
+
+    # After task agent, check for handoff or end
     graph.add_conditional_edges(
-        "router",
-        select_agent,
+        "task",
+        check_for_handoff,
         {
-            AgentType.TASK.value: "task",
-            AgentType.RESEARCH.value: "research",
+            "router": "router",
+            END: END,
         },
     )
-
-    # Research flow: subgraph -> post-processing
-    graph.add_edge("research", "research_post")
-
-    # After each agent (or research_post), check for handoff or end
-    for agent in ["task", "research_post"]:
-        graph.add_conditional_edges(
-            agent,
-            check_for_handoff,
-            {
-                "router": "router",
-                END: END,
-            },
-        )
 
     return graph.compile(checkpointer=checkpointer)
 
@@ -1002,7 +867,7 @@ def _apply_budget_pressure_defaults(
         or (max_tool_calls and max_tool_calls <= 6)
     ):
         if normalized_tier in {"max", "pro"}:
-            target_tier = "flash"
+            target_tier = "lite"
             reason = "strict_budget"
     elif (
         (max_cost and max_cost <= 0.25)

@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { InterruptEvent, InterruptResponse, InterruptOption } from "@/lib/types";
+import { getTranslatedSkillName } from "@/lib/utils/skill-i18n";
 
 interface AskUserInputProps {
     interrupt: InterruptEvent;
@@ -234,6 +235,7 @@ function TextInput({
 // Generate localized message for tool approval from tool_info
 function useApprovalMessage(interrupt: InterruptEvent): string {
     const t = useTranslations("hitl");
+    const tSkills = useTranslations("skills");
 
     if (interrupt.interrupt_type !== "approval" || !interrupt.tool_info) {
         return interrupt.message;
@@ -263,6 +265,13 @@ function useApprovalMessage(interrupt: InterruptEvent): string {
             return t("approvalFileDelete", { path });
         }
         return t("approvalFileModify", { path });
+    }
+
+    // Handle invoke_skill — resolve skill_id to a translated name
+    if (name === "invoke_skill" || lowerName.startsWith("invoke_skill:")) {
+        const skillId = (args.skill_id as string) || name.split(":")[1] || "unknown";
+        const skillName = getTranslatedSkillName(skillId, skillId, tSkills);
+        return t("approvalSkillInvocation", { skillName });
     }
 
     return t("approvalGenericTool", { toolName: name });

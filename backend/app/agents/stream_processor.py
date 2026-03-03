@@ -73,6 +73,8 @@ TOOL_CONTENT_LIMITS: dict[str, int] = {
     "create_app_project": 3000,  # Extra space for terminal events
     "app_run_command": 3000,  # Extra space for terminal events
     "app_install_packages": 3000,  # Extra space for terminal events
+    "shell_exec": 3000,  # Extra space for terminal events
+    "execute_code": 3000,  # Extra space for terminal events
 }
 DEFAULT_CONTENT_LIMIT = 500
 
@@ -312,15 +314,17 @@ class StreamProcessor:
             "workspace_update",
             "browser_stream",
         ):
-            # Build a content-based dedup key
+            # Build a content-based dedup key (include timestamp so events
+            # from different tool calls with similar content don't collide)
+            ts = e.get("timestamp", "")
             if event_type == "terminal_command":
-                key = f"tcmd:{e.get('command', '')}"
+                key = f"tcmd:{ts}:{e.get('command', '')}"
             elif event_type == "terminal_output":
-                key = f"tout:{e.get('content', '')[:200]}"
+                key = f"tout:{ts}:{e.get('content', '')[:200]}"
             elif event_type == "terminal_error":
-                key = f"terr:{e.get('content', '')[:200]}"
+                key = f"terr:{ts}:{e.get('content', '')[:200]}"
             elif event_type == "terminal_complete":
-                key = f"tcmp:{e.get('exit_code', '')}"
+                key = f"tcmp:{ts}:{e.get('exit_code', '')}"
             elif event_type == "workspace_update":
                 key = f"ws:{e.get('operation', '')}:{e.get('path', '')}"
             elif event_type == "browser_stream":
@@ -668,6 +672,37 @@ class StreamProcessor:
                         title=parsed.get("title", ""),
                         download_url=parsed["download_url"][:80],
                     )
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Extract terminal/workspace events from shell_exec and execute_code
+        if tool_name in ("shell_exec", "execute_code") and output:
+            try:
+                import json
+
+                parsed = json.loads(output)
+                if isinstance(parsed, dict):
+                    terminal_events = parsed.get("terminal_events", [])
+                    if terminal_events:
+                        evt_types = [
+                            e.get("type")
+                            for e in terminal_events
+                            if isinstance(e, dict)
+                        ]
+                        logger.info(
+                            "shell_code_tool_events_extracted",
+                            tool_name=tool_name,
+                            event_count=len(terminal_events),
+                            event_types=evt_types,
+                        )
+                    for evt in terminal_events:
+                        if isinstance(evt, dict) and self._should_emit_subevent(evt, tool_name):
+                            yield evt
+
+                    workspace_events = parsed.get("workspace_events", [])
+                    for evt in workspace_events:
+                        if isinstance(evt, dict) and self._should_emit_subevent(evt, tool_name):
+                            yield evt
             except (json.JSONDecodeError, ValueError):
                 pass
 

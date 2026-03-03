@@ -18,7 +18,8 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CATEGORY_ICONS, CATEGORY_ACCENT, DEFAULT_ACCENT } from "@/lib/utils/skill-categories";
+import { SKILL_ICONS, SKILL_ACCENT, CATEGORY_ICONS, CATEGORY_ACCENT, DEFAULT_ACCENT } from "@/lib/utils/skill-categories";
+import { getTranslatedSkillName, getTranslatedSkillDescription, getTranslatedCategory } from "@/lib/utils/skill-i18n";
 
 interface SkillDetailViewProps {
   skillId: string;
@@ -94,7 +95,7 @@ export function SkillDetailView({ skillId }: SkillDetailViewProps) {
     return (
       <div className="flex flex-col items-center justify-center py-24 gap-3">
         <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Loading...</p>
+        <p className="text-sm text-muted-foreground">{t("loading")}</p>
       </div>
     );
   }
@@ -105,7 +106,7 @@ export function SkillDetailView({ skillId }: SkillDetailViewProps) {
         <div className="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
           <AlertCircle className="w-5 h-5 text-destructive" />
         </div>
-        <p className="text-sm text-muted-foreground">{error || "Skill not found"}</p>
+        <p className="text-sm text-muted-foreground">{error || t("notFound")}</p>
         <Link
           href="/skills"
           className="text-sm text-foreground font-medium underline underline-offset-4 hover:text-foreground/80"
@@ -117,9 +118,9 @@ export function SkillDetailView({ skillId }: SkillDetailViewProps) {
   }
 
   const Icon =
-    CATEGORY_ICONS[skill.category as keyof typeof CATEGORY_ICONS] || Code;
+    SKILL_ICONS[skill.id] || CATEGORY_ICONS[skill.category as keyof typeof CATEGORY_ICONS] || Code;
   const accent =
-    CATEGORY_ACCENT[skill.category as keyof typeof CATEGORY_ACCENT] || DEFAULT_ACCENT;
+    SKILL_ACCENT[skill.id] || CATEGORY_ACCENT[skill.category as keyof typeof CATEGORY_ACCENT] || DEFAULT_ACCENT;
 
   return (
     <div className="space-y-8">
@@ -139,7 +140,9 @@ export function SkillDetailView({ skillId }: SkillDetailViewProps) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold tracking-tight">{skill.name}</h1>
+            <h1 className="text-2xl font-bold tracking-tight">
+              {getTranslatedSkillName(skill.id, skill.name, t)}
+            </h1>
             <span className="text-xs text-muted-foreground/60 font-mono bg-secondary px-2 py-0.5 rounded">
               v{skill.version}
             </span>
@@ -165,7 +168,7 @@ export function SkillDetailView({ skillId }: SkillDetailViewProps) {
             )}
           </div>
           <p className="text-muted-foreground mt-2 leading-relaxed">
-            {skill.description}
+            {getTranslatedSkillDescription(skill.id, skill.description, t)}
           </p>
         </div>
       </div>
@@ -175,7 +178,7 @@ export function SkillDetailView({ skillId }: SkillDetailViewProps) {
         <div className="flex items-center gap-1.5">
           <span className="text-muted-foreground">{t("category")}:</span>
           <span className="font-medium uppercase tracking-wider text-xs">
-            {skill.category}
+            {getTranslatedCategory(skill.category, t)}
           </span>
         </div>
         {skill.tags && skill.tags.length > 0 && (

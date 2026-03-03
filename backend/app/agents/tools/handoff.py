@@ -88,10 +88,8 @@ MAX_HANDOFFS = 3
 
 # Define which agents can delegate to which other agents
 HANDOFF_MATRIX: dict[str, list[str]] = {
-    AGENT_TASK: [
-        AGENT_RESEARCH,
-    ],
-    AGENT_RESEARCH: [],
+    AGENT_TASK: [],  # Research is now a skill, no standalone agents to hand off to
+    AGENT_RESEARCH: [],  # Kept for backward compatibility
 }
 
 # Agent descriptions for handoff tool docstrings

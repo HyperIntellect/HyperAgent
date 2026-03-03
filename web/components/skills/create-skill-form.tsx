@@ -26,11 +26,11 @@ import Link from "next/link";
 import { SkillCodeEditor } from "@/components/editor";
 
 const CATEGORIES = [
-  { id: "research", icon: Search, label: "Research" },
-  { id: "code", icon: Code, label: "Code" },
-  { id: "data", icon: BarChart3, label: "Data" },
-  { id: "creative", icon: Sparkles, label: "Creative" },
-  { id: "automation", icon: FileText, label: "Automation" },
+  { id: "research", icon: Search },
+  { id: "code", icon: Code },
+  { id: "data", icon: BarChart3 },
+  { id: "creative", icon: Sparkles },
+  { id: "automation", icon: FileText },
 ] as const;
 
 const PARAM_TYPES = ["string", "number", "boolean", "object", "array"] as const;
@@ -191,7 +191,7 @@ export function CreateSkillForm() {
                       )}
                     >
                       <CatIcon className="w-3.5 h-3.5" />
-                      {cat.label}
+                      {t(`categories.${cat.id}`)}
                     </button>
                   );
                 })}
@@ -318,13 +318,15 @@ export function CreateSkillForm() {
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{template.name}</span>
+                      <span className="text-sm font-medium">
+                        {t(`templates.${template.id}.name`)}
+                      </span>
                       {isSelected && (
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {template.description}
+                      {t(`templates.${template.id}.description`)}
                     </p>
                   </button>
                 );

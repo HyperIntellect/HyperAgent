@@ -797,6 +797,14 @@ def build_ai_message_from_chunks(response_chunks: list, query: str) -> AIMessage
                 )
                 continue
 
+        # Skip execute_code if code is missing (required field)
+        if tool_name == "execute_code" and not tool_args.get("code"):
+            logger.debug(
+                "skipping_execute_code_missing_code",
+                tool_args=tool_args,
+            )
+            continue
+
         # Skip browser_click if coordinates are missing (required fields)
         if tool_name == "browser_click" and (
             tool_args.get("x") is None or tool_args.get("y") is None
@@ -866,7 +874,7 @@ class ReActLoopConfig:
         parallel_tool_execution: Whether to execute independent tools in parallel
         max_parallel_tools: Maximum number of tools to execute in parallel (0 = unlimited)
     """
-    max_iterations: int = field(default_factory=lambda: _get_default_max_iterations())
+    max_iterations: int = 5
     max_retries_per_tool: int = 2
     retry_base_delay: float = 1.0
     enable_streaming: bool = True
@@ -880,67 +888,46 @@ class ReActLoopConfig:
     max_parallel_tools: int = 5  # Limit concurrent tool executions
 
 
-def _get_default_max_iterations() -> int:
-    """Get default max_iterations from settings."""
-    from app.config import settings
-    return settings.react_max_iterations
+def get_react_config(agent_type: str, tier=None) -> ReActLoopConfig:
+    """Get the ReAct loop configuration for a specific agent type and tier.
 
-
-# Agent-specific preset configurations
-def _get_agent_react_configs() -> dict[str, ReActLoopConfig]:
-    """Get agent-specific ReAct configurations using settings."""
-    from app.config import settings
-
-    return {
-        "task": ReActLoopConfig(
-            max_iterations=settings.react_max_iterations,
-            handoff_behavior="immediate",
-            truncate_tool_results=True,
-            tool_result_max_chars=2000,
-            parallel_tool_execution=True,
-            max_parallel_tools=5,
-        ),
-        "data": ReActLoopConfig(
-            max_iterations=max(5, settings.react_max_iterations),  # Enough for generate→execute→fix cycles
-            handoff_behavior="deferred",
-            truncate_tool_results=True,
-            tool_result_max_chars=2000,
-            parallel_tool_execution=True,
-            max_parallel_tools=3,
-        ),
-        "research": ReActLoopConfig(
-            max_iterations=settings.react_max_iterations,
-            handoff_behavior="deferred",
-            truncate_tool_results=True,
-            tool_result_max_chars=3000,
-            parallel_tool_execution=True,
-            max_parallel_tools=5,
-        ),
-    }
-
-
-# Lazy-load agent configs to avoid circular imports
-_agent_configs_cache: dict[str, ReActLoopConfig] | None = None
-
-def _get_agent_configs() -> dict[str, ReActLoopConfig]:
-    """Get cached agent configs."""
-    global _agent_configs_cache
-    if _agent_configs_cache is None:
-        _agent_configs_cache = _get_agent_react_configs()
-    return _agent_configs_cache
-
-
-def get_react_config(agent_type: str) -> ReActLoopConfig:
-    """Get the ReAct loop configuration for a specific agent type.
+    Uses ``get_quality_profile(tier)`` to derive iteration limits, parallelism,
+    and truncation thresholds.  Agent-type overrides (e.g. handoff behavior,
+    extra chars for research) are layered on top.
 
     Args:
         agent_type: The agent type (task, research, data)
+        tier: Optional ModelTier enum, string, or None (defaults to PRO)
 
     Returns:
-        ReActLoopConfig for the specified agent type, or default if not found
+        ReActLoopConfig tuned for the given agent + tier combination
     """
-    configs = _get_agent_configs()
-    return configs.get(agent_type, ReActLoopConfig())
+    from app.ai.model_tiers import get_quality_profile
+
+    profile = get_quality_profile(tier)
+
+    # Base config from quality profile
+    max_iterations = profile.react_max_iterations
+    tool_result_max_chars = profile.react_tool_result_max_chars
+    max_parallel_tools = profile.react_max_parallel_tools
+    handoff_behavior = "immediate"
+
+    # Agent-type overrides
+    if agent_type == "research":
+        handoff_behavior = "deferred"
+        tool_result_max_chars = profile.react_tool_result_max_chars + 500
+    elif agent_type == "data":
+        handoff_behavior = "deferred"
+        max_iterations = max(profile.data_analysis_max_iterations, profile.react_max_iterations)
+
+    return ReActLoopConfig(
+        max_iterations=max_iterations,
+        handoff_behavior=handoff_behavior,
+        truncate_tool_results=True,
+        tool_result_max_chars=tool_result_max_chars,
+        parallel_tool_execution=True,
+        max_parallel_tools=max_parallel_tools,
+    )
 
 
 def estimate_message_tokens(message: BaseMessage) -> int:
