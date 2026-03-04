@@ -83,6 +83,31 @@ def _safe_filename(file_id: str, filename: str) -> str:
     return f"{file_id}_{base_name}"
 
 
+# Pattern to extract a UUID from compound "{uuid}_{filename}" strings.
+# The LLM sometimes constructs attachment_ids from sandbox paths
+# (e.g. "d03fda0c-...-93a5_report.xlsx") instead of pure UUIDs.
+_UUID_RE = re.compile(
+    r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_.+)?$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_attachment_ids(ids: list[str]) -> list[str]:
+    """Extract pure UUIDs from attachment IDs that may include a filename suffix."""
+    out: list[str] = []
+    for raw in ids:
+        m = _UUID_RE.match(raw)
+        normalized = m.group(1) if m else raw
+        if normalized != raw:
+            logger.info(
+                "attachment_id_normalized",
+                raw=raw,
+                normalized=normalized,
+            )
+        out.append(normalized)
+    return out
+
+
 def _extract_code(response: str) -> str:
     """Extract Python code from markdown code blocks."""
     pattern = r"```python\n(.*?)```"
@@ -395,7 +420,7 @@ class DataAnalysisSkill(Skill):
             """Plan the data analysis approach."""
             params = state.get("input_params", {})
             query = params.get("query", "")
-            attachment_ids = params.get("attachment_ids", [])
+            attachment_ids = _normalize_attachment_ids(params.get("attachment_ids", []))
             data_source = params.get("data_source", "")
             user_id = state.get("user_id")
 
@@ -554,7 +579,7 @@ class DataAnalysisSkill(Skill):
             params = state.get("input_params", {})
             query = state.get("query", "")
             analysis_plan = state.get("analysis_plan", "")
-            attachment_ids = state.get("attachment_ids", [])
+            attachment_ids = _normalize_attachment_ids(state.get("attachment_ids", []))
             user_id = state.get("user_id")
             task_id = state.get("task_id")
 

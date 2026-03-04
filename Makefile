@@ -1,4 +1,4 @@
-.PHONY: help install install-web install-backend dev dev-web dev-backend dev-worker dev-worker-watch dev-worker-burst dev-worker-high dev-all build build-web start-web lint lint-web lint-backend format-backend type-check test test-backend clean migrate migrate-down migrate-new migrate-status health queue-stats queue-monitor queue-list queue-clear queue-health queue-test eval eval-routing eval-tools eval-quality eval-langsmith sandbox-pull-images sandbox-build-app-image
+.PHONY: help install install-web install-backend dev dev-web dev-backend dev-worker dev-worker-watch dev-worker-burst dev-worker-high dev-all build build-web start-web lint lint-web lint-backend format-backend type-check test test-backend clean migrate migrate-down migrate-new migrate-status health queue-stats queue-monitor queue-list queue-clear queue-health queue-test eval eval-routing eval-tools eval-quality eval-langsmith eval-reliability gate-reliability sandbox-pull-images sandbox-build-app-image
 
 # Colors
 CYAN := \033[36m
@@ -131,6 +131,15 @@ eval-quality: ## Run response quality evaluations
 eval-langsmith: ## Run evals with LangSmith tracking
 	@echo "$(CYAN)Running evaluations with LangSmith...$(RESET)"
 	cd backend && LANGCHAIN_TRACING_V2=true uv run pytest evals/ -v -m langsmith
+
+eval-reliability: ## Generate reliability report from run ledger
+	@echo "$(CYAN)Generating reliability report...$(RESET)"
+	cd backend && uv run python scripts/reliability_report.py --days 7 --markdown-out ../docs/reliability-report.md
+
+gate-reliability: ## Enforce reliability gate (TSR + stream correctness)
+	@echo "$(CYAN)Running reliability gate...$(RESET)"
+	cd web && npm run replay:check
+	cd backend && uv run python scripts/reliability_report.py --days 7 --gate --min-tsr 0.50 --max-duplicate-rate 0.003 --max-missing-complete-rate 0.001
 
 # =============================================================================
 # Migrations

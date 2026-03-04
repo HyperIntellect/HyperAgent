@@ -565,8 +565,11 @@ class TaskToolHooks(ToolExecutionHooks):
             attachment_ids = self.state.get("attachment_ids") or []
             if attachment_ids and user_id:
                 from app.agents.skills.builtin.data_analysis_skill import (
+                    _normalize_attachment_ids,
                     _upload_attachments_to_sandbox,
                 )
+
+                attachment_ids = _normalize_attachment_ids(attachment_ids)
 
                 _upload_evts, _ok, _ = await _upload_attachments_to_sandbox(
                     attachment_ids, user_id, task_id,
@@ -577,16 +580,9 @@ class TaskToolHooks(ToolExecutionHooks):
         # 0. Skill-level HITL policy (invoke_skill can encapsulate high-risk tools)
         if ctx.tool_name == "invoke_skill":
             skill_id = str(ctx.tool_args.get("skill_id", "")).strip()
-
-            # Skip HITL approval if the skill was explicitly selected by the user
-            # (the user already indicated intent by choosing the skill from the UI)
-            explicitly_selected_skills = self.state.get("skills") or []
-            if skill_id and skill_id in explicitly_selected_skills:
-                logger.info(
-                    "hitl_skip_explicitly_selected_skill",
-                    skill_id=skill_id,
-                )
-                return None  # Proceed to execution without HITL
+            user_intent_source = str(
+                ctx.tool_args.get("user_intent_source") or "agent_selected"
+            )
 
             skill_policy = get_policy_engine().decide(
                 PolicyInput(
@@ -597,6 +593,7 @@ class TaskToolHooks(ToolExecutionHooks):
                     risk_threshold=settings.hitl_default_risk_threshold,
                     contract=get_tool_contract("invoke_skill"),
                     is_skill_invocation=True,
+                    user_intent_source=user_intent_source,  # audit context only
                 )
             )
             ctx.policy_decision = skill_policy.decision.value

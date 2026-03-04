@@ -364,6 +364,7 @@ async def reason_node(state: TaskState) -> dict:
                         # to ensure they survive LangChain's tool parsing pipeline.
                         "user_id": state.get("user_id"),
                         "task_id": state.get("task_id"),
+                        "user_intent_source": "agent_selected",
                     },
                     "id": tool_call_id,
                     "type": "tool_call",
@@ -427,6 +428,7 @@ async def reason_node(state: TaskState) -> dict:
                             # to ensure they survive LangChain's tool parsing pipeline.
                             "user_id": state.get("user_id"),
                             "task_id": state.get("task_id"),
+                            "user_intent_source": "explicit_ui_skill",
                         },
                         "id": tool_call_id,
                         "type": "tool_call",

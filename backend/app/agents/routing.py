@@ -10,6 +10,7 @@ from app.agents.parallel import is_parallelizable_query
 from app.agents.state import AgentType, SupervisorState
 from app.ai.llm import llm_service
 from app.ai.model_tiers import ModelTier
+from app.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -224,6 +225,34 @@ async def route_query(state: SupervisorState) -> dict:
         Dict with selected_agent and routing_reason
     """
     query = state.get("query", "")
+
+    explicit_mode = state.get("mode")
+    if settings.routing_mode == "deterministic":
+        reason = "Deterministic routing mode"
+        if explicit_mode:
+            reason = f"Deterministic routing with explicit mode: {explicit_mode}"
+        routing_event = {
+            "type": "routing",
+            "agent": AgentType.TASK.value,
+            "reason": reason,
+            "confidence": 1.0,
+        }
+        if is_parallelizable_query(query):
+            routing_event["parallel_eligible"] = True
+        return {
+            "selected_agent": AgentType.TASK.value,
+            "routing_reason": reason,
+            "routing_confidence": 1.0,
+            "parallel_eligible": bool(routing_event.get("parallel_eligible", False)),
+            "events": [
+                routing_event,
+                events.reasoning(
+                    thinking=f"Routing to task: {reason}",
+                    confidence=1.0,
+                    context="routing",
+                ),
+            ],
+        }
 
     # Honor explicit mode if provided and valid
     explicit_mode = state.get("mode")

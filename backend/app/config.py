@@ -186,6 +186,7 @@ class Settings(BaseSettings):
     parallel_executor_v1: bool = True
     run_ledger_v1: bool = True
     parallel_executor_max_agents: int = 4
+    routing_mode: Literal["deterministic", "llm"] = "deterministic"
 
     # MCP (Model Context Protocol) settings
     mcp_enabled: bool = True

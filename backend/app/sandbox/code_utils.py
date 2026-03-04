@@ -54,6 +54,11 @@ USAGE_PATTERNS = {
     r"\bnp\.": "numpy",
     r"\bplt\.": "matplotlib",
     r"\bsns\.": "seaborn",
+    # pandas Excel operations implicitly require openpyxl
+    r"read_excel\s*\(": "openpyxl",
+    r"\.to_excel\s*\(": "openpyxl",
+    r"\bExcelFile\s*\(": "openpyxl",
+    r"\bExcelWriter\s*\(": "openpyxl",
 }
 
 

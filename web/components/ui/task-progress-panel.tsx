@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useTranslations } from "next-intl";
 import {
-    Check, AlertCircle, ChevronDown, Globe, ExternalLink,
+    ChevronDown, Globe, ExternalLink,
     Search, Terminal, FileText, Sparkles, Wrench, ImageIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -362,20 +362,6 @@ function getToolDisplayName(
         .replace(/^\w/, (c) => c.toUpperCase());
 }
 
-// Animated pulsing dot for running state
-function PulsingDot({ size = "md" }: { size?: "sm" | "md" }) {
-    const outer = size === "sm" ? "w-4 h-4" : "w-5 h-5";
-    const inner = size === "sm" ? "h-2 w-2" : "h-2.5 w-2.5";
-    return (
-        <span className={cn(outer, "flex items-center justify-center")}>
-            <span className={cn("relative flex", inner)}>
-                <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-40")} />
-                <span className={cn("relative inline-flex rounded-full bg-primary", inner)} />
-            </span>
-        </span>
-    );
-}
-
 // Live duration with clean formatting
 function LiveDuration({ startMs, endMs }: { startMs: number; endMs?: number }) {
     const [now, setNow] = useState(() => Date.now());
@@ -390,38 +376,10 @@ function LiveDuration({ startMs, endMs }: { startMs: number; endMs?: number }) {
     const seconds = duration / 1000;
 
     if (seconds < 1) return null;
-    if (seconds < 60) return <span className="tabular-nums text-xs font-medium text-muted-foreground/70">{Math.floor(seconds)}s</span>;
+    if (seconds < 60) return <span className="tabular-nums text-xs font-medium text-muted-foreground/50">{Math.floor(seconds)}s</span>;
     const minutes = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    return <span className="tabular-nums text-xs font-medium text-muted-foreground/70">{minutes}:{secs.toString().padStart(2, '0')}</span>;
-}
-
-// Stage status icon — simplified, no ring
-function StageStatusIcon({ status, muted = false }: { status: "pending" | "running" | "completed" | "failed"; muted?: boolean }) {
-    if (status === "running") {
-        return <PulsingDot size="sm" />;
-    }
-
-    if (status === "completed") {
-        return (
-            <div className={cn(
-                "w-4 h-4 rounded-full flex items-center justify-center",
-                muted ? "bg-muted" : "bg-success/15"
-            )}>
-                <Check className={cn("w-2.5 h-2.5", muted ? "text-muted-foreground" : "text-success")} strokeWidth={2.5} />
-            </div>
-        );
-    }
-
-    if (status === "failed") {
-        return (
-            <div className="w-4 h-4 rounded-full bg-destructive/15 flex items-center justify-center">
-                <AlertCircle className="w-2.5 h-2.5 text-destructive" strokeWidth={2.5} />
-            </div>
-        );
-    }
-
-    return <div className="w-2 h-2 rounded-full bg-muted-foreground/25 ml-1" />;
+    return <span className="tabular-nums text-xs font-medium text-muted-foreground/50">{minutes}:{secs.toString().padStart(2, '0')}</span>;
 }
 
 // Group tools by name and count them
@@ -470,7 +428,7 @@ function groupTools(
 
 // Tool icon component — maps tool names to Lucide icons
 function ToolIcon({ name: toolName, className }: { name: string; className?: string }) {
-    const cls = className || "w-3 h-3 flex-shrink-0 text-muted-foreground/70";
+    const cls = className || "w-3 h-3 flex-shrink-0 text-muted-foreground/50";
     const n = toolName.toLowerCase();
     if (n === "web_search" || n === "google_search" || n.includes("search")) return <Search className={cls} />;
     if (n === "execute_code" || n === "app_run_command" || n.includes("execute")) return <Terminal className={cls} />;
@@ -504,46 +462,54 @@ function computeStageStatus(
     return "pending";
 }
 
-// Rounded pill badge for a single tool
-function ToolChip({ name, displayName, active }: { name: string; displayName: string; active?: boolean }) {
+// --- New timeline components ---
+
+// Tiny dot indicator for stage status
+function StageDot({ status }: { status: "pending" | "running" | "completed" | "failed" }) {
+    if (status === "running") {
+        return (
+            <span className="flex items-center justify-center w-2.5 h-2.5">
+                <span className="w-2 h-2 rounded-full border-[1.5px] border-primary border-t-transparent animate-spin-slow" />
+            </span>
+        );
+    }
+    const dotClass = {
+        completed: "bg-primary/40",
+        failed: "bg-destructive/50",
+        pending: "bg-muted-foreground/20",
+    }[status];
     return (
-        <span className={cn(
-            "inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg border border-border/50 max-w-[260px]",
-            active ? "bg-secondary" : "bg-secondary/50"
-        )}>
-            <ToolIcon name={name} />
-            <span className="truncate text-muted-foreground/80">{displayName}</span>
+        <span className="flex items-center justify-center w-2.5 h-2.5">
+            <span className={cn("w-1.5 h-1.5 rounded-full", dotClass)} />
         </span>
     );
 }
 
-// Render tools as pill chips — group when > 6
-function ToolChipList({ tools, tTools, isHistorical }: {
+// Inline tool list — plain text, no borders
+function InlineToolList({ tools, tTools, isHistorical, isActive }: {
     tools: ProgressEvent[];
     tTools?: ReturnType<typeof useTranslations>;
     isHistorical: boolean;
+    isActive: boolean;
 }) {
     if (tools.length === 0) return null;
 
+    const textClass = isActive ? "text-muted-foreground/70" : "text-muted-foreground/50";
+
     if (tools.length <= 6) {
-        // Render individual pills
         return (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 {tools.map((tool, idx) => {
                     const toolName = tool.tool || tool.name || "unknown";
                     const skillId = toolName === "invoke_skill"
                         ? (tool.args?.skill_id as string | undefined)
                         : undefined;
                     const display = getToolDisplayName(toolName, tTools, skillId);
-                    const endTs = getEventEndTimestamp(tool);
-                    const isActive = !isHistorical && tool.status !== "completed" && endTs === undefined;
                     return (
-                        <ToolChip
-                            key={`tool-${idx}`}
-                            name={skillId ? `invoke_skill:${skillId}` : toolName}
-                            displayName={display}
-                            active={isActive}
-                        />
+                        <span key={`tool-${idx}`} className={cn("inline-flex items-center gap-1 text-xs", textClass)}>
+                            <ToolIcon name={skillId ? `invoke_skill:${skillId}` : toolName} className={cn("w-3 h-3 flex-shrink-0", textClass)} />
+                            <span className="truncate max-w-[200px]">{display}</span>
+                        </span>
                     );
                 })}
             </div>
@@ -553,16 +519,13 @@ function ToolChipList({ tools, tTools, isHistorical }: {
     // Group by name when > 6 tools
     const grouped = groupTools(tools, tTools, isHistorical);
     return (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             {grouped.map((g) => (
-                <span
-                    key={g.name}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg border border-border/50 bg-secondary/50 max-w-[260px]"
-                >
-                    <ToolIcon name={g.name} />
-                    <span className="truncate text-muted-foreground/80">{g.displayName}</span>
+                <span key={g.name} className={cn("inline-flex items-center gap-1 text-xs", textClass)}>
+                    <ToolIcon name={g.name} className={cn("w-3 h-3 flex-shrink-0", textClass)} />
+                    <span className="truncate max-w-[200px]">{g.displayName}</span>
                     {g.count > 1 && (
-                        <span className="tabular-nums text-[10px] font-semibold text-muted-foreground/60 bg-muted/80 px-1.5 py-0.5 rounded-md leading-none">
+                        <span className="tabular-nums text-[10px] text-muted-foreground/40">
                             {g.completedCount}/{g.count}
                         </span>
                     )}
@@ -572,16 +535,17 @@ function ToolChipList({ tools, tTools, isHistorical }: {
     );
 }
 
-// Collapsible stage section (accordion)
-function StageSection({
+// Timeline row: dot + vertical connector + label + inline tools
+function TimelineStage({
     label,
     status,
     duration,
     tools,
     reasoningEvents,
     tTools,
-    isHistorical = false,
-    defaultExpanded = false,
+    isHistorical,
+    isLast,
+    showTools,
 }: {
     label: string;
     status: "pending" | "running" | "completed" | "failed";
@@ -589,31 +553,34 @@ function StageSection({
     tools?: ProgressEvent[];
     reasoningEvents?: ProgressEvent[];
     tTools?: ReturnType<typeof useTranslations>;
-    isHistorical?: boolean;
-    defaultExpanded?: boolean;
+    isHistorical: boolean;
+    isLast: boolean;
+    showTools: boolean;
 }) {
-    const [isOpen, setIsOpen] = useState(() => defaultExpanded || status === "running");
-
-    const hasContent = (tools && tools.length > 0) || (reasoningEvents && reasoningEvents.length > 0);
     const showDuration = !isHistorical && duration?.start !== undefined;
+    const hasTools = showTools && tools && tools.length > 0;
+    const hasReasoning = reasoningEvents && reasoningEvents.length > 0;
+    const hasContent = hasTools || hasReasoning;
 
     return (
-        <div className="py-1.5">
-            {/* Stage header */}
-            <button
-                className="flex items-center gap-2.5 w-full text-left group hover:opacity-80"
-                onClick={() => hasContent && setIsOpen(!isOpen)}
-            >
-                <div className="flex-shrink-0">
-                    <StageStatusIcon status={status} muted={isHistorical && status === "completed"} />
+        <div className="relative">
+            {/* Vertical connector line */}
+            {!isLast && (
+                <div className="absolute left-[5px] top-[14px] bottom-0 w-px bg-border/40" />
+            )}
+
+            {/* Stage header row */}
+            <div className="flex items-center gap-2.5 py-1.5">
+                <div className="flex-shrink-0 relative z-10">
+                    <StageDot status={status} />
                 </div>
 
                 <span className={cn(
-                    "flex-1 text-base leading-snug font-semibold tracking-tight min-w-0 truncate",
+                    "flex-1 text-sm font-medium leading-snug min-w-0 truncate",
                     status === "running" && "text-foreground",
-                    status === "completed" && (isHistorical ? "text-muted-foreground/70" : "text-muted-foreground/80"),
-                    status === "failed" && "text-destructive",
-                    status === "pending" && "text-muted-foreground/40"
+                    status === "completed" && "text-muted-foreground/60",
+                    status === "failed" && "text-destructive/80",
+                    status === "pending" && "text-muted-foreground/30"
                 )}>
                     {label}
                 </span>
@@ -623,45 +590,38 @@ function StageSection({
                         <LiveDuration startMs={duration.start} endMs={duration.end} />
                     </div>
                 )}
+            </div>
 
-                {hasContent && (
-                    <ChevronDown className={cn(
-                        "w-3.5 h-3.5 text-muted-foreground/50 flex-shrink-0 transition-transform duration-200",
-                        !isOpen && "-rotate-90"
-                    )} />
-                )}
-            </button>
-
-            {/* Accordion content */}
+            {/* Tool list and reasoning — indented under the connector */}
             {hasContent && (
-                <div className={cn("accordion-grid", isOpen && "accordion-open")}>
-                    <div className="accordion-inner">
-                        <div className="pl-[26px] pt-2 space-y-2.5">
-                            {tools && tools.length > 0 && (
-                                <ToolChipList tools={tools} tTools={tTools} isHistorical={isHistorical} />
-                            )}
-
-                            {reasoningEvents && reasoningEvents.length > 0 && (
-                                <div className="space-y-1">
-                                    {reasoningEvents.map((re, idx) => (
-                                        <p
-                                            key={`reasoning-${idx}`}
-                                            className="text-xs text-muted-foreground/60 italic leading-relaxed"
-                                        >
-                                            {re.thinking}
-                                        </p>
-                                    ))}
-                                </div>
-                            )}
+                <div className="pl-[22px] pb-1">
+                    {hasTools && (
+                        <InlineToolList
+                            tools={tools!}
+                            tTools={tTools}
+                            isHistorical={isHistorical}
+                            isActive={status === "running"}
+                        />
+                    )}
+                    {hasReasoning && (
+                        <div className="mt-1 space-y-0.5">
+                            {reasoningEvents!.map((re, idx) => (
+                                <p
+                                    key={`reasoning-${idx}`}
+                                    className="text-xs text-muted-foreground/40 italic leading-relaxed"
+                                >
+                                    {re.thinking}
+                                </p>
+                            ))}
                         </div>
-                    </div>
+                    )}
                 </div>
             )}
         </div>
     );
 }
 
-// Sources section with accordion
+// Sources section — streamlined for borderless layout
 function SourcesSection({ sources }: { sources: Source[] }) {
     const [isExpanded, setIsExpanded] = useState(false);
     const tProgress = useTranslations("sidebar.progress");
@@ -669,39 +629,39 @@ function SourcesSection({ sources }: { sources: Source[] }) {
     if (sources.length === 0) return null;
 
     return (
-        <div className="mt-4 pt-4 border-t border-border/50">
+        <div className="mt-3 pt-2">
             <button
-                className="flex items-center gap-2.5 w-full text-left group hover:opacity-80 transition-opacity"
+                className="flex items-center gap-2 w-full text-left group hover:opacity-80 transition-opacity"
                 onClick={() => setIsExpanded(!isExpanded)}
             >
-                <Globe className="w-4 h-4 text-muted-foreground/70" />
-                <span className="flex-1 text-xs font-semibold text-muted-foreground/90 uppercase tracking-wider">
+                <Globe className="w-3 h-3 text-muted-foreground/50" />
+                <span className="flex-1 text-xs font-medium text-muted-foreground/50 uppercase tracking-wider">
                     {tProgress("sourcesCount", { count: sources.length })}
                 </span>
                 <ChevronDown className={cn(
-                    "w-3.5 h-3.5 text-muted-foreground/50 transition-transform duration-200",
+                    "w-3 h-3 text-muted-foreground/40 transition-transform duration-200",
                     !isExpanded && "-rotate-90"
                 )} />
             </button>
 
             <div className={cn("accordion-grid", isExpanded && "accordion-open")}>
                 <div className="accordion-inner">
-                    <div className="mt-3 space-y-0.5">
+                    <div className="mt-2 space-y-0.5">
                         {sources.slice(0, 5).map((source) => (
                             <a
                                 key={source.id}
                                 href={source.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="flex items-center gap-2.5 py-2 px-2.5 -mx-2.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors group"
+                                className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded-md text-xs text-muted-foreground/50 hover:text-foreground hover:bg-muted/60 transition-colors group"
                             >
-                                <ExternalLink className="w-3.5 h-3.5 flex-shrink-0 opacity-60 group-hover:opacity-100 transition-opacity" />
+                                <ExternalLink className="w-3 h-3 flex-shrink-0 opacity-60 group-hover:opacity-100 transition-opacity" />
                                 <span className="truncate leading-relaxed">{source.title}</span>
                             </a>
                         ))}
                         {sources.length > 5 && (
-                            <div className="pt-2 pl-6">
-                                <span className="text-[11px] text-muted-foreground/60 font-medium">
+                            <div className="pt-1.5 pl-5">
+                                <span className="text-[11px] text-muted-foreground/40 font-medium">
                                     {tProgress("moreSources", { count: sources.length - 5 })}
                                 </span>
                             </div>
@@ -722,7 +682,7 @@ interface TaskProgressPanelProps {
 }
 
 /**
- * Task progress panel — Manus-inspired collapsible stages with pill badges
+ * Task progress panel — clean borderless timeline
  * Handles both live streaming events and historical (saved) events
  */
 export function TaskProgressPanel({
@@ -733,7 +693,7 @@ export function TaskProgressPanel({
     className,
 }: TaskProgressPanelProps) {
     const isHistorical = !isStreaming;
-    const [isExpanded, setIsExpanded] = useState(!isHistorical);
+    const [isExpanded, setIsExpanded] = useState(false);
     const tProgress = useTranslations("sidebar.progress");
     const t = useTranslations("chat.agent");
     const tStages = useTranslations("chat.agent.stages");
@@ -779,95 +739,64 @@ export function TaskProgressPanel({
 
     if (stageGroups.length === 0) return null;
 
+    // Shared timeline renderer
+    const renderTimeline = () => (
+        <>
+            {stageGroups.map((group, index) => {
+                const status = computeStageStatus(group, isHistorical, isStreaming);
+                const label = getStageDescription(group.stage, tStages, agentType, t, tTools);
+                const isLast = index === stageGroups.length - 1;
+                // Live mode: show tools on running stages. Historical: show tools on all stages.
+                const showTools = isHistorical || status === "running";
+
+                return (
+                    <TimelineStage
+                        key={`stage-${index}`}
+                        label={label}
+                        status={status}
+                        duration={{ start: group.startTime, end: group.endTime }}
+                        tools={group.tools}
+                        reasoningEvents={group.reasoningEvents}
+                        tTools={tTools}
+                        isHistorical={isHistorical}
+                        isLast={isLast}
+                        showTools={showTools}
+                    />
+                );
+            })}
+            <SourcesSection sources={sources} />
+        </>
+    );
+
+    // Live streaming mode — borderless inline timeline
+    if (isStreaming) {
+        return (
+            <div className={cn("mt-2 mb-4", className)}>
+                {renderTimeline()}
+            </div>
+        );
+    }
+
+    // Historical mode — compact summary toggle
     return (
-        <div className={cn(
-            "rounded-xl border border-border/50 bg-card overflow-hidden max-w-full",
-            isHistorical ? "mt-4" : "mt-4 mb-6",
-            className
-        )}>
-            {/* Header */}
+        <div className={cn("mt-3", className)}>
             <button
-                className="flex items-center gap-3.5 w-full px-5 py-3.5 text-left hover:bg-secondary/50 transition-colors"
+                className="flex items-center gap-2 w-full text-left group hover:opacity-80 transition-opacity py-1.5"
                 onClick={() => setIsExpanded(!isExpanded)}
             >
-                {/* Status icon */}
-                {isStreaming ? (
-                    <PulsingDot />
-                ) : progressSummary.hasError ? (
-                    <div className="w-5 h-5 rounded-full bg-destructive/15 flex items-center justify-center">
-                        <AlertCircle className="w-3 h-3 text-destructive" strokeWidth={2.5} />
-                    </div>
-                ) : isHistorical ? (
-                    <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center">
-                        <Check className="w-3 h-3 text-muted-foreground" strokeWidth={2.5} />
-                    </div>
-                ) : (
-                    <div className="w-5 h-5 rounded-full bg-success/15 flex items-center justify-center">
-                        <Check className="w-3 h-3 text-success" strokeWidth={2.5} />
-                    </div>
-                )}
-
-                {/* Title / Summary */}
-                <span className={cn(
-                    "flex-1 text-sm font-semibold tracking-tight",
-                    isHistorical ? "text-muted-foreground/90" : "text-foreground"
-                )}>
-                    {isHistorical
-                        ? summaryText
-                        : (isStreaming ? tProgress("processing") : tProgress("completed"))
-                    }
-                </span>
-
-                {/* Progress badge */}
-                {!isHistorical && (
-                    <span className="text-xs tabular-nums font-semibold text-muted-foreground/80 px-2 py-1 rounded-md bg-muted/60">
-                        {progressSummary.completed}/{progressSummary.total}
-                    </span>
-                )}
-
-                {/* Expand chevron */}
                 <ChevronDown className={cn(
-                    "w-4 h-4 text-muted-foreground/50 transition-transform duration-200",
+                    "w-3.5 h-3.5 text-muted-foreground/40 flex-shrink-0 transition-transform duration-200",
                     !isExpanded && "-rotate-90"
                 )} />
+                <span className="text-xs text-muted-foreground/60 font-medium">
+                    {summaryText}
+                </span>
             </button>
 
-            {/* Content — accordion animated */}
             <div className={cn("accordion-grid", isExpanded && "accordion-open")}>
                 <div className="accordion-inner">
-                    <div className="px-5 pb-5 pt-1">
-                        <div className="space-y-0">
-                            {stageGroups.map((group, index) => {
-                                const status = computeStageStatus(group, isHistorical, isStreaming);
-                                const label = getStageDescription(group.stage, tStages, agentType, t, tTools);
-                                const isLast = index === stageGroups.length - 1;
-
-                                return (
-                                    <StageSection
-                                        key={`stage-${index}`}
-                                        label={label}
-                                        status={status}
-                                        duration={{ start: group.startTime, end: group.endTime }}
-                                        tools={group.tools}
-                                        reasoningEvents={group.reasoningEvents}
-                                        tTools={tTools}
-                                        isHistorical={isHistorical}
-                                        defaultExpanded={isLast || status === "running"}
-                                    />
-                                );
-                            })}
-                        </div>
-
-                        <SourcesSection sources={sources} />
-
-                        {/* Bottom footer — live mode only */}
-                        {!isHistorical && (
-                            <div className="mt-4 pt-3 border-t border-border/40 flex justify-end">
-                                <span className="text-xs tabular-nums font-medium text-muted-foreground/60">
-                                    {progressSummary.completed}/{progressSummary.total}
-                                </span>
-                            </div>
-                        )}
+                    <div className="pl-1 pt-1 pb-2">
+                        {renderTimeline()}
                     </div>
                 </div>
             </div>

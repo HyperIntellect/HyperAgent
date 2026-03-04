@@ -85,6 +85,9 @@ class RunLedgerService:
         status: str,
         *,
         last_error: str | None = None,
+        outcome_label: str | None = None,
+        outcome_reason_code: str | None = None,
+        quality_score: float | None = None,
     ) -> None:
         async with get_db_session() as db:
             run = await db.get(AgentRun, run_id)
@@ -92,6 +95,12 @@ class RunLedgerService:
                 return
             run.status = status
             run.last_error = last_error
+            if outcome_label is not None:
+                run.outcome_label = outcome_label
+            if outcome_reason_code is not None:
+                run.outcome_reason_code = outcome_reason_code
+            if quality_score is not None:
+                run.quality_score = quality_score
             if status in {"completed", "failed", "cancelled"}:
                 run.completed_at = datetime.now(timezone.utc)
             await db.commit()
@@ -259,4 +268,3 @@ class RunLedgerService:
 
 
 run_ledger_service = RunLedgerService()
-

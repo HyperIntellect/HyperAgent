@@ -1,6 +1,8 @@
 """Unified query router for both chat and research modes."""
 
 import asyncio
+import hashlib
+import json
 import uuid
 from typing import Any, AsyncGenerator
 
@@ -311,6 +313,35 @@ async def stream_query(
         # Event types that are passed through as-is (no field mapping needed)
         _PASSTHROUGH_EVENTS = {"stage", "complete"}
 
+        def _stable_event_fingerprint(event_type: str, payload: dict[str, Any]) -> str:
+            if event_type == "tool_call" and payload.get("id"):
+                return f"tool_call:{payload.get('id')}"
+            if event_type == "tool_result" and payload.get("id"):
+                return f"tool_result:{payload.get('id')}"
+            if event_type == "stage":
+                return f"stage:{payload.get('name', '')}:{payload.get('status', '')}"
+            if event_type == "reasoning":
+                return f"reasoning:{hashlib.sha1((payload.get('thinking', '') + ':' + str(payload.get('context', ''))).encode()).hexdigest()[:16]}"
+            if event_type == "source":
+                src = f"{payload.get('url', '')}|{payload.get('title', '')}|{payload.get('snippet', '')}"
+                return f"source:{hashlib.sha1(src.encode()).hexdigest()[:16]}"
+            if event_type == "token":
+                token_text = str(payload.get("data") or payload.get("content") or "")
+                return f"token:{hashlib.sha1(token_text.encode()).hexdigest()[:16]}"
+            canonical = json.dumps(payload, sort_keys=True, default=str)
+            return f"{event_type}:{hashlib.sha1(canonical.encode()).hexdigest()[:16]}"
+
+        def _attach_event_metadata(
+            event_type: str,
+            payload: dict[str, Any],
+            sequence_no: int,
+        ) -> dict[str, Any]:
+            payload["sequence_no"] = sequence_no
+            payload["event_id"] = _stable_event_fingerprint(event_type, payload)
+            if event_type == "tool_result" and payload.get("id"):
+                payload["parent_event_id"] = f"tool_call:{payload.get('id')}"
+            return payload
+
         def _build_sse_payload(event_type: str, event: dict) -> dict[str, Any] | None:
             """Build SSE payload from event using declarative field map."""
             if event_type in _PASSTHROUGH_EVENTS:
@@ -327,6 +358,11 @@ async def stream_query(
 
         # Stream agent response using supervisor
         async def agent_generator() -> AsyncGenerator[str, None]:
+            sequence_no = 0
+            saw_error_event = False
+            saw_token_event = False
+            saw_complete_event = False
+            tool_error_count = 0
             try:
                 async for event in agent_supervisor.run(
                     query=request.message,
@@ -355,7 +391,9 @@ async def stream_query(
                             "streaming_browser_stream_event",
                             sandbox_id=event.get("sandbox_id", "")[:8],
                         )
-                        yield _sse_data(
+                        sequence_no += 1
+                        payload = _attach_event_metadata(
+                            "browser_stream",
                             {
                                 "type": "browser_stream",
                                 "run_id": run_id,
@@ -363,19 +401,15 @@ async def stream_query(
                                 "stream_url": event.get("stream_url", ""),
                                 "sandbox_id": event.get("sandbox_id", ""),
                                 "auth_key": event.get("auth_key"),
-                            }
+                            },
+                            sequence_no,
                         )
+                        yield _sse_data(payload)
                         if settings.run_ledger_v1:
                             await run_ledger_service.record_event(
                                 run_id=run_id,
                                 event_type="browser_stream",
-                                payload={
-                                    "run_id": run_id,
-                                    "step_id": event.get("id"),
-                                    "stream_url": event.get("stream_url", ""),
-                                    "sandbox_id": event.get("sandbox_id", ""),
-                                    "auth_key": event.get("auth_key"),
-                                },
+                                payload=payload,
                                 step_id=event.get("id"),
                                 dedup_key=f"browser_stream:{event.get('sandbox_id')}",
                             )
@@ -407,6 +441,8 @@ async def stream_query(
                                 has_url=bool(img_url),
                                 index=event.get("index"),
                             )
+                            sequence_no += 1
+                            payload = _attach_event_metadata("image", payload, sequence_no)
                             yield _sse_data(payload)
                             if settings.run_ledger_v1:
                                 await run_ledger_service.record_event(
@@ -425,7 +461,9 @@ async def stream_query(
                             interrupt_id=event.get("interrupt_id", "")[:8],
                             interrupt_type=event.get("interrupt_type"),
                         )
-                        yield _sse_data(
+                        sequence_no += 1
+                        payload = _attach_event_metadata(
+                            "interrupt",
                             {
                                 "type": "interrupt",
                                 "run_id": run_id,
@@ -439,21 +477,15 @@ async def stream_query(
                                 "default_action": event.get("default_action"),
                                 "timeout_seconds": event.get("timeout_seconds", 120),
                                 "timestamp": event.get("timestamp"),
-                            }
+                            },
+                            sequence_no,
                         )
+                        yield _sse_data(payload)
                         if settings.run_ledger_v1:
                             await run_ledger_service.record_event(
                                 run_id=run_id,
                                 event_type="interrupt",
-                                payload={
-                                    "type": "interrupt",
-                                    "run_id": run_id,
-                                    "step_id": event.get("id"),
-                                    "interrupt_id": event.get("interrupt_id", ""),
-                                    "interrupt_type": event.get("interrupt_type", "input"),
-                                    "title": event.get("title", "Agent Question"),
-                                    "message": event.get("message", ""),
-                                },
+                                payload=payload,
                                 step_id=event.get("id"),
                                 dedup_key=f"interrupt:{event.get('interrupt_id')}",
                             )
@@ -467,6 +499,23 @@ async def stream_query(
                             for extra_key in ("policy_decision", "budget_state", "verification"):
                                 if extra_key in event and event.get(extra_key) is not None:
                                     sse_payload[extra_key] = event.get(extra_key)
+                            sequence_no += 1
+                            sse_payload = _attach_event_metadata(event_type, sse_payload, sequence_no)
+                            if event_type == "token":
+                                saw_token_event = True
+                            if event_type == "error":
+                                saw_error_event = True
+                            if event_type == "complete":
+                                saw_complete_event = True
+                            if event_type == "tool_result":
+                                content = str(sse_payload.get("content") or "")
+                                if (
+                                    "Error executing" in content
+                                    or "Failed:" in content
+                                    or "Traceback" in content
+                                    or "Exception:" in content
+                                ):
+                                    tool_error_count += 1
                             yield _sse_data(sse_payload)
                             dedup_key = None
                             if event_type in {"tool_call", "tool_result"}:
@@ -492,7 +541,13 @@ async def stream_query(
                 if settings.run_ledger_v1:
                     try:
                         await asyncio.shield(
-                            run_ledger_service.mark_run_status(run_id, "cancelled")
+                            run_ledger_service.mark_run_status(
+                                run_id,
+                                "cancelled",
+                                outcome_label="user_cancelled",
+                                outcome_reason_code="user_cancelled",
+                                quality_score=0.0,
+                            )
                         )
                     except asyncio.CancelledError:
                         pass
@@ -500,7 +555,14 @@ async def stream_query(
             except Exception as e:
                 logger.error("agent_stream_error", mode=request.mode.value, error=str(e))
                 if settings.run_ledger_v1:
-                    await run_ledger_service.mark_run_status(run_id, "failed", last_error=str(e))
+                    await run_ledger_service.mark_run_status(
+                        run_id,
+                        "failed",
+                        last_error=str(e),
+                        outcome_label="failed",
+                        outcome_reason_code="stream_exception",
+                        quality_score=0.0,
+                    )
                 yield _sse_data({"type": "error", "data": str(e)})
             finally:
                 # Shield cleanup DB work from cancellation to prevent connection leaks
@@ -508,7 +570,32 @@ async def stream_query(
                     if settings.run_ledger_v1:
                         run = await run_ledger_service.get_run(run_id)
                         if run and run.get("status") == "running":
-                            await run_ledger_service.mark_run_status(run_id, "completed")
+                            outcome = "success" if saw_token_event else "partial"
+                            outcome_reason_code = "response_generated"
+                            quality_score = 1.0
+                            if saw_error_event:
+                                outcome = "failed"
+                                outcome_reason_code = "stream_error_event"
+                                quality_score = 0.1
+                            elif not saw_complete_event:
+                                outcome = "partial"
+                                outcome_reason_code = "stream_terminated_without_complete"
+                                quality_score = 0.4
+                            elif tool_error_count > 0:
+                                outcome = "partial"
+                                outcome_reason_code = "tool_errors_recovered"
+                                quality_score = 0.6
+                            elif not saw_token_event:
+                                outcome = "partial"
+                                outcome_reason_code = "no_assistant_content"
+                                quality_score = 0.3
+                            await run_ledger_service.mark_run_status(
+                                run_id,
+                                "completed",
+                                outcome_label=outcome,
+                                outcome_reason_code=outcome_reason_code,
+                                quality_score=quality_score,
+                            )
                     # Sandbox cleanup is handled by timeout-based expiry (30 min idle),
                     # NOT on SSE disconnect, to keep sandboxes alive across conversation messages.
                     #

@@ -1,0 +1,42 @@
+[
+  {
+    "type": "stage",
+    "name": "thinking",
+    "status": "running",
+    "event_id": "stage:thinking:running",
+    "sequence_no": 1
+  },
+  {
+    "type": "tool_call",
+    "tool": "web_search",
+    "id": "tc_1",
+    "event_id": "tool_call:tc_1",
+    "sequence_no": 2
+  },
+  {
+    "type": "tool_result",
+    "tool": "web_search",
+    "id": "tc_1",
+    "content": "Top result",
+    "event_id": "tool_result:tc_1",
+    "parent_event_id": "tool_call:tc_1",
+    "sequence_no": 3
+  },
+  {
+    "type": "token",
+    "data": "Hello ",
+    "event_id": "token:abc123",
+    "sequence_no": 4
+  },
+  {
+    "type": "token",
+    "data": "world",
+    "event_id": "token:def456",
+    "sequence_no": 5
+  },
+  {
+    "type": "complete",
+    "event_id": "complete:1",
+    "sequence_no": 6
+  }
+]

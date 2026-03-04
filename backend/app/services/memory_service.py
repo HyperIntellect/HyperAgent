@@ -8,6 +8,7 @@ testing and development without a database.
 """
 
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -33,6 +34,36 @@ class MemoryType(str, Enum):
 
 
 ALL_MEMORY_TYPES = [t.value for t in MemoryType]
+
+
+UNSAFE_INSTRUCTION_PATTERNS = (
+    r"\bignore\b.*\b(instruction|policy|rule|safety)\b",
+    r"\boverride\b.*\b(safety|policy|guardrail)\b",
+    r"\bsystem prompt\b",
+    r"\bdeveloper message\b",
+    r"\btool\b.*\bwithout\b.*\bapproval\b",
+    r"\bexfiltrate\b|\bleak\b|\bsecret\b",
+    r"\bjailbreak\b|\bbypass\b.*\bguardrail\b",
+)
+
+SANITIZE_RENDER_PATTERNS = (
+    r"(?im)^\s*(important:|instruction:|system:).*$",
+    r"(?im)^\s*you must .*$",
+)
+
+
+def _is_unsafe_instruction(text: str) -> bool:
+    lowered = text.lower()
+    return any(re.search(pat, lowered) for pat in UNSAFE_INSTRUCTION_PATTERNS)
+
+
+def _sanitize_memory_for_prompt(content: str) -> str:
+    sanitized = content.strip()
+    for pattern in SANITIZE_RENDER_PATTERNS:
+        sanitized = re.sub(pattern, "", sanitized).strip()
+    # Keep memory content concise and prevent XML/control injection into prompt blocks.
+    sanitized = sanitized.replace("<", "").replace(">", "").strip()
+    return sanitized
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +426,10 @@ _TYPE_CONFIG = {
 
 def _format_memory_item(m: MemoryEntry) -> str:
     """Format a single memory entry, including relevant metadata."""
-    line = f"- {m.content}"
+    safe_content = _sanitize_memory_for_prompt(m.content)
+    if not safe_content:
+        return ""
+    line = f"- {safe_content}"
     meta_parts = []
     if m.metadata:
         if m.metadata.get("tools_used"):
@@ -417,7 +451,14 @@ def _format_memories(memories: list[MemoryEntry]) -> str:
     # Group by type, keeping full MemoryEntry for metadata access
     grouped: dict[str, list[MemoryEntry]] = {}
     for m in memories:
+        trust_level = (m.metadata or {}).get("trust_level", "trusted")
+        safety_flags = set((m.metadata or {}).get("safety_flags") or [])
+        if trust_level == "quarantined" or "unsafe_instruction" in safety_flags:
+            continue
         grouped.setdefault(m.memory_type, []).append(m)
+
+    if not grouped:
+        return ""
 
     lines = ["<user_memories>"]
     lines.append("Remembered from previous conversations:")
@@ -429,7 +470,9 @@ def _format_memories(memories: list[MemoryEntry]) -> str:
             lines.append(f"<{tag}>")
             lines.append(f"<!-- {cfg['guidance']} -->")
             for m in items:
-                lines.append(_format_memory_item(m))
+                item = _format_memory_item(m)
+                if item:
+                    lines.append(item)
             lines.append(f"</{tag}>")
 
     # Handle any types not in the config map
@@ -437,7 +480,9 @@ def _format_memories(memories: list[MemoryEntry]) -> str:
         if mem_type not in _TYPE_CONFIG:
             lines.append(f"<{mem_type}>")
             for m in items:
-                lines.append(_format_memory_item(m))
+                item = _format_memory_item(m)
+                if item:
+                    lines.append(item)
             lines.append(f"</{mem_type}>")
 
     lines.append("Use these to personalize responses. Do not mention them unless asked.")
@@ -555,6 +600,14 @@ async def extract_memories_from_conversation(
 
                 # Merge episodic metadata for episodic memories
                 item_metadata = item.get("metadata") or {}
+                item_metadata.setdefault("source_type", "llm_extraction")
+                item_metadata.setdefault("trust_level", "trusted")
+                item_metadata.setdefault("safety_flags", [])
+                if _is_unsafe_instruction(item["content"]):
+                    item_metadata["trust_level"] = "quarantined"
+                    flags = set(item_metadata.get("safety_flags") or [])
+                    flags.add("unsafe_instruction")
+                    item_metadata["safety_flags"] = sorted(flags)
                 if mem_type == "episodic" and episodic_context:
                     item_metadata.setdefault("tools_used", episodic_context.get("tools_used", []))
                     item_metadata.setdefault("outcome", episodic_context.get("outcome"))

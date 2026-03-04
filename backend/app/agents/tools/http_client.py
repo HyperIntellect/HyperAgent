@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 
 # Maximum response body size (1 MB)
 MAX_RESPONSE_SIZE = 1 * 1024 * 1024
+MAX_REDIRECTS = 5
 
 # Allowed HTTP methods
 ALLOWED_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
@@ -66,6 +67,35 @@ def _validate_request_url(url: str) -> tuple[bool, str | None]:
         return False, f"Requests to private/internal addresses are blocked: {hostname}"
 
     return True, None
+
+
+async def _resolve_host_ips(hostname: str) -> tuple[bool, list[str], str | None]:
+    """Resolve hostname and ensure all resolved IPs are public-routable."""
+    try:
+        import asyncio
+        import socket
+
+        loop = asyncio.get_running_loop()
+        infos = await loop.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+        ips: set[str] = set()
+        for info in infos:
+            sockaddr = info[4]
+            if not sockaddr:
+                continue
+            ip = sockaddr[0]
+            ips.add(ip)
+        if not ips:
+            return False, [], "dns_resolution_failed"
+        for ip in ips:
+            try:
+                addr = ipaddress.ip_address(ip)
+                if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+                    return False, sorted(ips), "resolved_private_ip"
+            except ValueError:
+                return False, sorted(ips), "invalid_resolved_ip"
+        return True, sorted(ips), None
+    except Exception:
+        return False, [], "dns_resolution_error"
 
 
 # ---------------------------------------------------------------------------
@@ -152,12 +182,78 @@ async def http_request(
     try:
         client_timeout = aiohttp.ClientTimeout(total=timeout)
         async with aiohttp.ClientSession(timeout=client_timeout) as session:
-            async with session.request(
-                method=method_upper,
-                url=url,
-                headers=request_headers,
-                data=body.encode("utf-8") if body else None,
-            ) as response:
+            current_url = url
+            response = None
+            for _ in range(MAX_REDIRECTS + 1):
+                parsed = urlparse(current_url)
+                hostname = parsed.hostname or ""
+                dns_ok, resolved_ips, dns_error = await _resolve_host_ips(hostname)
+                if not dns_ok:
+                    logger.warning(
+                        "http_request_blocked_dns_resolution",
+                        url=current_url[:100],
+                        hostname=hostname,
+                        resolved_ips=resolved_ips,
+                        reason=dns_error,
+                    )
+                    return json.dumps(
+                        {
+                            "success": False,
+                            "error": f"Blocked request to non-public address: {hostname}",
+                            "blocked_reason_code": dns_error or "resolved_private_ip",
+                        }
+                    )
+
+                response = await session.request(
+                    method=method_upper,
+                    url=current_url,
+                    headers=request_headers,
+                    data=body.encode("utf-8") if body else None,
+                    allow_redirects=False,
+                )
+                if response.status in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("Location")
+                    response.release()
+                    if not location:
+                        break
+                    from urllib.parse import urljoin
+
+                    current_url = urljoin(current_url, location)
+                    is_valid_redirect, redirect_error = _validate_request_url(current_url)
+                    if not is_valid_redirect:
+                        logger.warning(
+                            "http_request_blocked_redirect",
+                            redirect_url=current_url[:100],
+                            error=redirect_error,
+                        )
+                        return json.dumps(
+                            {
+                                "success": False,
+                                "error": redirect_error,
+                                "blocked_reason_code": "unsafe_redirect_url",
+                            }
+                        )
+                    continue
+                break
+
+            if response is None:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": "Failed to obtain HTTP response",
+                        "blocked_reason_code": "no_response",
+                    }
+                )
+            if response.status in {301, 302, 303, 307, 308}:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": f"Too many redirects (max {MAX_REDIRECTS})",
+                        "blocked_reason_code": "redirect_limit_exceeded",
+                    }
+                )
+
+            async with response:
                 # Read response with size limit
                 response_body = await response.content.read(MAX_RESPONSE_SIZE)
                 truncated = not response.content.at_eof()
@@ -188,6 +284,7 @@ async def http_request(
                     "status_code": response.status,
                     "headers": resp_headers,
                     "body": body_text[:MAX_RESPONSE_SIZE],
+                    "final_url": str(response.url),
                 }
 
                 if truncated:

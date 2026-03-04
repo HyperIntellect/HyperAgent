@@ -30,6 +30,7 @@ class PolicyInput:
     risk_threshold: Literal["high", "medium", "all"] = "high"
     contract: CapabilityContract | None = None
     is_skill_invocation: bool = False
+    user_intent_source: Literal["explicit_ui_skill", "agent_selected"] | None = None
 
 
 @dataclass
@@ -107,4 +108,3 @@ _policy_engine = PolicyEngine()
 
 def get_policy_engine() -> PolicyEngine:
     return _policy_engine
-

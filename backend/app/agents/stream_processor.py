@@ -252,10 +252,7 @@ class StreamProcessor:
         event_type = e.get("type")
 
         # Token deduplication
-        is_programmatic_node = any(
-            keyword in node_name.lower() for keyword in ["present", "image", "summarize"]
-        )
-        if event_type == "token" and self.streamed_tokens and not is_programmatic_node:
+        if event_type == "token" and self.streamed_tokens:
             return False
 
         # Stage deduplication
@@ -818,6 +815,7 @@ class StreamProcessor:
             "workspace_update",
             "plan_overview",
             "plan_step_completed",
+            "image",
         ):
             return
 

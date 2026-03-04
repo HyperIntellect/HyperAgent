@@ -269,6 +269,11 @@
                 "app_run_command": "运行命令",
                 "app_get_preview_url": "获取预览链接",
                 "AppPlan": "应用规划",
+                "file_read": "读取文件",
+                "file_write": "写入文件",
+                "file_str_replace": "编辑文件",
+                "file_find_by_name": "查找文件",
+                "file_find_in_content": "搜索文件内容",
                 "default": "工具"
             },
             "stages": {
@@ -902,7 +907,6 @@
         "terminalOutput": "终端输出",
         "scrollToBottom": "滚动到底部",
         "errorMessage": "计算机面板中发生了意外错误。",
-        "activityUsing": "HyperAgent 正在使用",
         "activityIdle": "空闲",
         "executingCommand": "正在执行命令",
         "expandSteps": "展开步骤",

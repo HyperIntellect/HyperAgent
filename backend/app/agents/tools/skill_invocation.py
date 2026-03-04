@@ -19,8 +19,9 @@ def _remove_internal_fields(schema: dict[str, Any]) -> dict[str, Any]:
     props = schema.get("properties", {})
     props.pop("user_id", None)
     props.pop("task_id", None)
+    props.pop("user_intent_source", None)
     required = schema.get("required", [])
-    schema["required"] = [r for r in required if r not in ("user_id", "task_id")]
+    schema["required"] = [r for r in required if r not in ("user_id", "task_id", "user_intent_source")]
     return schema
 
 
@@ -42,6 +43,11 @@ class InvokeSkillInput(BaseModel):
         description="Task ID for session management (internal use only)",
         json_schema_extra={"exclude": True},
     )
+    user_intent_source: str | None = Field(
+        default=None,
+        description="How this skill invocation was selected (internal use only)",
+        json_schema_extra={"exclude": True},
+    )
 
 
 @tool(args_schema=InvokeSkillInput)
@@ -50,6 +56,7 @@ async def invoke_skill(
     params: dict[str, Any],
     user_id: str | None = None,
     task_id: str | None = None,
+    user_intent_source: str | None = None,
 ) -> str:
     """Invoke a registered skill to perform a specialized task.
 
@@ -73,6 +80,7 @@ async def invoke_skill(
         params_keys=list(params.keys()) if params else [],
         user_id=user_id,
         task_id=task_id,
+        user_intent_source=user_intent_source,
         user_id_is_none=user_id is None,
     )
 
@@ -147,6 +155,7 @@ async def invoke_skill(
                 "terminal_complete",
                 "browser_stream",
                 "workspace_update",
+                "image",
             ):
                 # Dispatch in real-time via LangChain callback system
                 # so the stream processor can yield them immediately

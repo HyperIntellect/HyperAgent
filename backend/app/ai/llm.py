@@ -262,21 +262,20 @@ class LLMService:
     async def generate_title(
         self,
         message: str,
-        provider: str = "anthropic",
+        provider: str | None = None,
         model: str | None = None,
     ) -> str:
         """Generate a concise title for a conversation based on the user's message.
 
         Args:
             message: The user's input message
-            provider: LLM provider to use
+            provider: LLM provider override (if None, uses LITE tier config)
             model: Optional model override
 
         Returns:
             A concise title (max 5-6 words)
         """
-        logger.info("llm_invocation", task_type="naming", provider=provider, model=model)
-        llm = self.get_llm(provider, model)
+        llm = self.get_llm_for_tier(ModelTier.LITE, provider=provider, model_override=model)
 
         prompt = (
             "Generate a very concise, meaningful title for an AI conversation "

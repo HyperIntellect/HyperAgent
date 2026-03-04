@@ -64,7 +64,9 @@ import {
     generatedImageToFileAttachment,
     fileAttachmentToExternalEntry,
 } from "@/lib/utils/streaming-helpers";
+import { reduceStreamEvent } from "@/lib/utils/stream-reducer";
 import type { ExternalFileEntry } from "@/lib/stores/computer-store";
+import { getTranslatedSkillName } from "@/lib/utils/skill-i18n";
 
 // Larger icons for better visual presence
 const AGENT_KEYS = ["research", "data", "app", "image", "slide"] as const;
@@ -182,32 +184,19 @@ export function ChatInterface() {
     const tResearch = useTranslations("research");
     const tChat = useTranslations("chat");
     const tTools = useTranslations("chat.agent.tools");
+    const tSkills = useTranslations("skills");
 
-    // Helper to get translated tool name
+    // Helper to get translated tool name — dynamic lookup with fallback
     const getTranslatedToolName = useCallback((toolName: string): string => {
         const toolKey = toolName.toLowerCase();
-        switch (toolKey) {
-            case "web_search":
-                return tTools("web_search");
-            case "google_search":
-                return tTools("google_search");
-            case "web":
-                return tTools("web");
-            case "generate_image":
-                return tTools("generate_image");
-            case "analyze_image":
-                return tTools("analyze_image");
-            case "execute_code":
-                return tTools("execute_code");
-            case "sandbox_file":
-                return tTools("sandbox_file");
-            case "browser_use":
-                return tTools("browser_use");
-            case "browser_navigate":
-                return tTools("browser_navigate");
-            default:
-                return tTools("default");
+        try {
+            if (typeof tTools.has === "function" && tTools.has(toolKey as Parameters<typeof tTools.has>[0])) {
+                return tTools(toolKey as Parameters<typeof tTools>[0]);
+            }
+        } catch {
+            // fall through
         }
+        return tTools("default");
     }, [tTools]);
     const [input, setInput] = useState("");
     const [selectedAgent, setSelectedAgent] = useState<AgentType | null>(null);
@@ -776,6 +765,148 @@ export function ChatInterface() {
 
             const decoder = new TextDecoder();
             let buffer = "";
+            let streamComplete = false;
+
+            const streamHandlers = {
+                onToken: (token: string) => handleTokenContent(token),
+                onStage: (event: StreamEvent) => {
+                    flushTokenBatch();
+                    const eventData = typeof event.data === "object" && event.data !== null ? event.data : null;
+                    const stageDescription = event.description || eventData?.description || null;
+                    updateAgentStage(stageDescription);
+                    addStreamingEvent(event);
+                },
+                onToolCall: (event: StreamEvent) => {
+                    const eventData = typeof event.data === "object" && event.data !== null ? event.data : null;
+                    const toolName = event.tool || eventData?.tool || "web";
+                    const args = event.args || eventData?.args || {};
+                    const rawQuery = typeof args === "object" && args !== null ? (args as Record<string, unknown>).query : undefined;
+                    const queryArg = typeof rawQuery === "string" ? rawQuery : "web";
+                    if (isSearchTool(toolName)) {
+                        updateAgentStage(tChat("agent.searching", { query: queryArg }));
+                    } else {
+                        updateAgentStage(tChat("agent.executing", { tool: getTranslatedToolName(toolName) }));
+                    }
+                    addStreamingEvent(event);
+                },
+                onToolResult: (event: StreamEvent) => addStreamingEvent(event),
+                onRouting: (event: StreamEvent) => addStreamingEvent(event),
+                onHandoff: (event: StreamEvent) => {
+                    const target = event.target || "";
+                    updateAgentStage(tChat("agent.handoffTo", { target }));
+                    addStreamingEvent(event);
+                },
+                onSource: (event: StreamEvent) => {
+                    addStreamingEvent(event);
+                    const newSource = parseSourceFromEvent(event, ctx.collectedSources.length);
+                    if (newSource) addStreamingSource(newSource);
+                },
+                onCodeResult: (event: StreamEvent) => addStreamingEvent(event),
+                onImage: (event: StreamEvent) => {
+                    const imageData = parseImageFromEvent(event, ctx.collectedImages.length);
+                    if (imageData) {
+                        const isDuplicate = ctx.collectedImages.some((img) => img.index === imageData.index);
+                        if (!isDuplicate) {
+                            ctx.collectedImages.push(imageData);
+                            ctx.collectedEvents.push(event);
+                            const previewFile = generatedImageToFileAttachment(imageData);
+                            if (previewFile) {
+                                const entry = fileAttachmentToExternalEntry(previewFile, "generated-image");
+                                if (previewFile.previewUrl?.startsWith("data:")) {
+                                    entry.base64Data = previewFile.previewUrl;
+                                }
+                                openFileInBrowser(entry);
+                            }
+                        }
+                    }
+                },
+                onBrowserStream: (event: StreamEvent) => addStreamingEvent(event),
+                onBrowserActionStage: (event: AgentEvent) => addStreamingEvent(event),
+                onTerminalCommand: (event: StreamEvent) => {
+                    const command = event.command as string;
+                    const cwd = event.cwd as string | undefined;
+                    if (command) {
+                        setCurrentCommand(command, cwd);
+                        addTerminalLine({ type: "command", content: command, cwd });
+                        if (!hasOpenedTerminal) {
+                            smartOpenComputer("terminal", false);
+                            hasOpenedTerminal = true;
+                        }
+                        addAgentEvent(event);
+                    }
+                },
+                onTerminalOutput: (event: StreamEvent) => {
+                    const output = (event.content || event.data) as string;
+                    if (output) addTerminalLine({ type: "output", content: output });
+                },
+                onTerminalError: (event: StreamEvent) => {
+                    const errorOutput = (event.content || event.data) as string;
+                    if (errorOutput) addTerminalLine({ type: "error", content: errorOutput });
+                },
+                onTerminalComplete: (event: StreamEvent) => {
+                    const exitCode = event.exit_code as number | undefined;
+                    setCurrentCommand(null);
+                    if (exitCode !== undefined && exitCode !== 0) {
+                        addTerminalLine({ type: "error", content: `Exit code: ${exitCode}` });
+                    }
+                    addAgentEvent(event);
+                },
+                onSkillOutput: (event: StreamEvent) => {
+                    const skillId = event.skill_id as string;
+                    addStreamingEvent(event);
+                    updateAgentStage(tChat("agent.skillCompleted", { skill: getTranslatedSkillName(skillId, skillId, tSkills) }));
+                    if (skillId === "slide_generation" && event.output) {
+                        const slideData = event.output as unknown as SlideOutput;
+                        if (slideData.download_url) {
+                            const slideEntry: ExternalFileEntry = {
+                                id: `slide-${Date.now()}`,
+                                name: slideData.title || "Presentation.pptx",
+                                source: "generated-slide",
+                                contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                fileSize: 0,
+                                downloadUrl: slideData.download_url,
+                                slideOutput: slideData,
+                                timestamp: Date.now(),
+                            };
+                            openFileInBrowser(slideEntry);
+                        }
+                    }
+                },
+                onWorkspaceUpdate: (event: StreamEvent) => {
+                    const workspaceEvent = {
+                        type: "workspace_update" as const,
+                        operation: event.operation as "create" | "modify" | "delete",
+                        path: event.path as string,
+                        name: event.name as string,
+                        is_directory: event.is_directory as boolean,
+                        size: event.size as number | undefined,
+                        sandbox_type: event.sandbox_type as "execution" | "app",
+                        sandbox_id: event.sandbox_id as string,
+                        timestamp: event.timestamp as number | undefined,
+                    };
+                    if (!workspaceSandboxId) {
+                        setWorkspaceContext(workspaceEvent.sandbox_type, workspaceEvent.sandbox_id, conversationId);
+                    }
+                    handleWorkspaceUpdate(workspaceEvent);
+                    refreshFiles([workspaceEvent.path]);
+                    if (
+                        (workspaceEvent.operation === "create" || workspaceEvent.operation === "modify")
+                        && workspaceEvent.sandbox_type === "app"
+                    ) {
+                        smartOpenComputer("file", false);
+                    }
+                },
+                onInterrupt: (interruptEvent: InterruptEvent, rawEvent: StreamEvent) => {
+                    setActiveInterrupt(interruptEvent);
+                    addStreamingEvent(rawEvent);
+                },
+                onUsage: (event: StreamEvent) => addStreamingEvent(event),
+                onError: (event: StreamEvent) => {
+                    const errorData = typeof event.data === "string" ? event.data : "Unknown error";
+                    ctx.fullContent = tChat("agent.error", { error: errorData });
+                    updateStreamingContent(ctx.fullContent);
+                },
+            };
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -796,197 +927,9 @@ export function ChatInterface() {
 
                         try {
                             const event = JSON.parse(jsonStr) as StreamEvent;
-
-                            if (event.type === "token" && (event.data || event.content)) {
-                                const tokenContent = (typeof event.data === "string" ? event.data : event.content) || "";
-                                handleTokenContent(tokenContent);
-                            } else if (event.type === "stage") {
-                                flushTokenBatch();
-                                const eventData = typeof event.data === "object" && event.data !== null ? event.data : null;
-                                const stageDescription = event.description || eventData?.description || null;
-                                updateAgentStage(stageDescription);
-                                addStreamingEvent(event);
-                            } else if (event.type === "tool_call") {
-                                const eventData = typeof event.data === "object" && event.data !== null ? event.data : null;
-                                const toolName = event.tool || eventData?.tool || "web";
-                                const args = event.args || eventData?.args || {};
-                                const rawQuery = typeof args === "object" && args !== null ? (args as Record<string, unknown>).query : undefined;
-                                const queryArg = typeof rawQuery === "string" ? rawQuery : "web";
-                                if (isSearchTool(toolName)) {
-                                    updateAgentStage(tChat("agent.searching", { query: queryArg }));
-                                } else {
-                                    updateAgentStage(tChat("agent.executing", { tool: getTranslatedToolName(toolName) }));
-                                }
-                                addStreamingEvent(event);
-                            } else if (event.type === "tool_result") {
-                                addStreamingEvent(event);
-                            } else if (event.type === "routing") {
-                                addStreamingEvent(event);
-                            } else if (event.type === "handoff") {
-                                const target = event.target || "";
-                                updateAgentStage(tChat("agent.handoffTo", { target }));
-                                addStreamingEvent(event);
-                            } else if (event.type === "source") {
-                                addStreamingEvent(event);
-                                const newSource = parseSourceFromEvent(event, ctx.collectedSources.length);
-                                if (newSource) {
-                                    addStreamingSource(newSource);
-                                }
-                            } else if (event.type === "code_result") {
-                                addStreamingEvent(event);
-                            } else if (event.type === "image") {
-                                const imageData = parseImageFromEvent(event, ctx.collectedImages.length);
-                                if (imageData) {
-                                    const isDuplicate = ctx.collectedImages.some(img => img.index === imageData.index);
-                                    if (!isDuplicate) {
-                                        ctx.collectedImages.push(imageData);
-                                        ctx.collectedEvents.push(event);
-                                        // Auto-open generated image in file browser
-                                        const previewFile = generatedImageToFileAttachment(imageData);
-                                        if (previewFile) {
-                                            const entry = fileAttachmentToExternalEntry(previewFile, "generated-image");
-                                            if (previewFile.previewUrl?.startsWith("data:")) {
-                                                entry.base64Data = previewFile.previewUrl;
-                                            }
-                                            openFileInBrowser(entry);
-                                        }
-                                    }
-                                }
-                            } else if (event.type === "browser_stream") {
-                                // Browser stream handling is consolidated in agent-progress-store
-                                // (via addStreamingEvent → addEvent) to avoid triple-write state updates.
-                                addStreamingEvent(event);
-                            } else if (event.type === "browser_action") {
-                                // Browser action handling is consolidated in agent-progress-store.
-                                // We still emit a stage event for the streaming event timeline display.
-                                const action = event.action as string;
-                                const description = event.description as string;
-                                const target = event.target as string | undefined;
-                                const status = (event.status as string) || "running";
-                                const browserStageEvent: AgentEvent = {
-                                    type: "stage",
-                                    name: `browser_${action}`,
-                                    description: target ? `${description}: ${target}` : description,
-                                    status: status === "completed" ? "completed" : "running",
-                                };
-                                addStreamingEvent(browserStageEvent);
-                            } else if (event.type === "terminal_command") {
-                                // Handle terminal command - agent is executing a shell command
-                                const command = event.command as string;
-                                const cwd = event.cwd as string | undefined;
-                                if (command) {
-                                    setCurrentCommand(command, cwd);
-                                    addTerminalLine({ type: "command", content: command, cwd });
-                                    // Only auto-open on the first terminal command in this stream
-                                    if (!hasOpenedTerminal) {
-                                        smartOpenComputer("terminal", false);
-                                        hasOpenedTerminal = true;
-                                    }
-                                    addAgentEvent(event);
-                                }
-                            } else if (event.type === "terminal_output") {
-                                // Handle terminal output (stdout)
-                                const output = (event.content || event.data) as string;
-                                if (output) {
-                                    addTerminalLine({ type: "output", content: output });
-                                }
-                            } else if (event.type === "terminal_error") {
-                                // Handle terminal error (stderr)
-                                const errorOutput = (event.content || event.data) as string;
-                                if (errorOutput) {
-                                    addTerminalLine({ type: "error", content: errorOutput });
-                                }
-                            } else if (event.type === "terminal_complete") {
-                                // Terminal command completed
-                                const exitCode = event.exit_code as number | undefined;
-                                setCurrentCommand(null);
-                                if (exitCode !== undefined && exitCode !== 0) {
-                                    addTerminalLine({ type: "error", content: `Exit code: ${exitCode}` });
-                                }
-                                addAgentEvent(event);
-                            } else if (event.type === "skill_output") {
-                                // Handle skill output events
-                                const skillId = event.skill_id as string;
-                                addStreamingEvent(event);
-                                updateAgentStage(tChat("agent.skillCompleted", { skill: skillId }));
-
-                                // Auto-open slide preview in sidebar
-                                if (skillId === "slide_generation" && event.output) {
-                                    const slideData = event.output as unknown as SlideOutput;
-                                    if (slideData.download_url) {
-                                        const slideEntry: ExternalFileEntry = {
-                                            id: `slide-${Date.now()}`,
-                                            name: slideData.title || "Presentation.pptx",
-                                            source: "generated-slide",
-                                            contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                            fileSize: 0,
-                                            downloadUrl: slideData.download_url,
-                                            slideOutput: slideData,
-                                            timestamp: Date.now(),
-                                        };
-                                        openFileInBrowser(slideEntry);
-                                    }
-                                }
-                            } else if (event.type === "workspace_update") {
-                                // Handle workspace file updates from sandbox
-                                const workspaceEvent = {
-                                    type: "workspace_update" as const,
-                                    operation: event.operation as "create" | "modify" | "delete",
-                                    path: event.path as string,
-                                    name: event.name as string,
-                                    is_directory: event.is_directory as boolean,
-                                    size: event.size as number | undefined,
-                                    sandbox_type: event.sandbox_type as "execution" | "app",
-                                    sandbox_id: event.sandbox_id as string,
-                                    timestamp: event.timestamp as number | undefined,
-                                };
-
-                                // Set workspace context on first event
-                                if (!workspaceSandboxId) {
-                                    setWorkspaceContext(
-                                        workspaceEvent.sandbox_type,
-                                        workspaceEvent.sandbox_id,
-                                        conversationId
-                                    );
-                                }
-
-                                // Update file tree
-                                handleWorkspaceUpdate(workspaceEvent);
-
-                                // Auto-refresh file view with debounce + highlight changed paths
-                                refreshFiles([workspaceEvent.path]);
-
-                                // Only auto-open for app sandbox workspace updates
-                                // Execution sandbox file changes are typically noise (temp files, output)
-                                if (
-                                    (workspaceEvent.operation === "create" || workspaceEvent.operation === "modify") &&
-                                    workspaceEvent.sandbox_type === "app"
-                                ) {
-                                    smartOpenComputer("file", false);
-                                }
-                            } else if (event.type === "interrupt") {
-                                const interruptEvent: InterruptEvent = {
-                                    type: "interrupt",
-                                    interrupt_id: event.interrupt_id as string,
-                                    interrupt_type: event.interrupt_type as InterruptEvent["interrupt_type"],
-                                    title: event.title as string,
-                                    message: event.message as string,
-                                    options: event.options,
-                                    tool_info: event.tool_info,
-                                    default_action: event.default_action,
-                                    timeout_seconds: (event.timeout_seconds as number) || 120,
-                                    timestamp: (event.timestamp as number | undefined) ?? Date.now(),
-                                };
-                                setActiveInterrupt(interruptEvent);
-                                addStreamingEvent(event);
-                            } else if (event.type === "usage") {
-                                addStreamingEvent(event);
-                            } else if (event.type === "error") {
-                                const errorData = typeof event.data === "string" ? event.data : "Unknown error";
-                                ctx.fullContent = tChat("agent.error", { error: errorData });
-                                updateStreamingContent(ctx.fullContent);
-                            } else if (event.type === "complete") {
-                                // Stream complete, break out of loop
+                            const reduced = reduceStreamEvent(event, streamHandlers);
+                            if (reduced.shouldBreak) {
+                                streamComplete = true;
                                 break;
                             }
                         } catch (e) {
@@ -997,6 +940,7 @@ export function ChatInterface() {
                         continue;
                     }
                 }
+                if (streamComplete) break;
             }
 
             if (ctx.fullContent || ctx.collectedImages.length > 0) {
@@ -1179,6 +1123,149 @@ export function ChatInterface() {
 
             const decoder = new TextDecoder();
             let buffer = "";
+            let streamComplete = false;
+
+            const streamHandlers = {
+                onToken: (token: string) => handleTokenContent(token),
+                onStage: (event: StreamEvent) => {
+                    flushTokenBatch();
+                    const eventData = typeof event.data === "object" && event.data !== null ? event.data : null;
+                    const stageDescription = event.description || eventData?.description || null;
+                    updateAgentStage(stageDescription);
+                    addStreamingEvent(event);
+                },
+                onToolCall: (event: StreamEvent) => {
+                    const eventData = typeof event.data === "object" && event.data !== null ? event.data : null;
+                    const toolName = event.tool || eventData?.tool || "tool";
+                    const args = event.args || eventData?.args || {};
+                    const rawQuery = typeof args === "object" && args !== null ? (args as Record<string, unknown>).query : undefined;
+                    const queryArg = typeof rawQuery === "string" ? rawQuery : "web";
+                    if (isSearchTool(toolName)) {
+                        updateAgentStage(tChat("agent.searching", { query: queryArg }));
+                    } else {
+                        updateAgentStage(tChat("agent.executing", { tool: getTranslatedToolName(toolName) }));
+                    }
+                    addStreamingEvent(event);
+                },
+                onToolResult: (event: StreamEvent) => addStreamingEvent(event),
+                onRouting: (event: StreamEvent) => addStreamingEvent(event),
+                onHandoff: (event: StreamEvent) => {
+                    const target = event.target || "";
+                    updateAgentStage(tChat("agent.handoffTo", { target }));
+                    addStreamingEvent(event);
+                },
+                onSource: (event: StreamEvent) => {
+                    addStreamingEvent(event);
+                    const newSource = parseSourceFromEvent(event, ctx.collectedSources.length);
+                    if (newSource) addStreamingSource(newSource);
+                },
+                onCodeResult: (event: StreamEvent) => addStreamingEvent(event),
+                onImage: (event: StreamEvent) => {
+                    const imageData = parseImageFromEvent(event, ctx.collectedImages.length);
+                    if (imageData) {
+                        const isDuplicate = ctx.collectedImages.some((img) => img.index === imageData.index);
+                        if (!isDuplicate) {
+                            ctx.collectedImages.push(imageData);
+                            ctx.collectedEvents.push(event);
+                            const previewFile = generatedImageToFileAttachment(imageData);
+                            if (previewFile) {
+                                const entry = fileAttachmentToExternalEntry(previewFile, "generated-image");
+                                if (previewFile.previewUrl?.startsWith("data:")) {
+                                    entry.base64Data = previewFile.previewUrl;
+                                }
+                                openFileInBrowser(entry);
+                            }
+                        }
+                    }
+                },
+                onBrowserStream: (event: StreamEvent) => addStreamingEvent(event),
+                onBrowserActionStage: (event: AgentEvent) => addStreamingEvent(event),
+                onTerminalCommand: (event: StreamEvent) => {
+                    const command = event.command as string;
+                    const cwd = event.cwd as string | undefined;
+                    if (command) {
+                        setCurrentCommand(command, cwd);
+                        addTerminalLine({ type: "command", content: command, cwd });
+                        if (!hasOpenedTerminal) {
+                            smartOpenComputer("terminal", false);
+                            hasOpenedTerminal = true;
+                        }
+                        addAgentEvent(event);
+                    }
+                },
+                onTerminalOutput: (event: StreamEvent) => {
+                    const output = (event.content || event.data) as string;
+                    if (output) addTerminalLine({ type: "output", content: output });
+                },
+                onTerminalError: (event: StreamEvent) => {
+                    const errorOutput = (event.content || event.data) as string;
+                    if (errorOutput) addTerminalLine({ type: "error", content: errorOutput });
+                },
+                onTerminalComplete: (event: StreamEvent) => {
+                    const exitCode = event.exit_code as number | undefined;
+                    setCurrentCommand(null);
+                    if (exitCode !== undefined && exitCode !== 0) {
+                        addTerminalLine({ type: "error", content: `Exit code: ${exitCode}` });
+                    }
+                    addAgentEvent(event);
+                },
+                onSkillOutput: (event: StreamEvent) => {
+                    const skillId = event.skill_id as string;
+                    addStreamingEvent(event);
+                    updateAgentStage(tChat("agent.skillCompleted", { skill: getTranslatedSkillName(skillId, skillId, tSkills) }));
+                    if (skillId === "slide_generation" && event.output) {
+                        const slideData = event.output as unknown as SlideOutput;
+                        if (slideData.download_url) {
+                            const slideEntry: ExternalFileEntry = {
+                                id: `slide-${Date.now()}`,
+                                name: slideData.title || "Presentation.pptx",
+                                source: "generated-slide",
+                                contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                fileSize: 0,
+                                downloadUrl: slideData.download_url,
+                                slideOutput: slideData,
+                                timestamp: Date.now(),
+                            };
+                            openFileInBrowser(slideEntry);
+                        }
+                    }
+                },
+                onWorkspaceUpdate: (event: StreamEvent) => {
+                    const workspaceEvent = {
+                        type: "workspace_update" as const,
+                        operation: event.operation as "create" | "modify" | "delete",
+                        path: event.path as string,
+                        name: event.name as string,
+                        is_directory: event.is_directory as boolean,
+                        size: event.size as number | undefined,
+                        sandbox_type: event.sandbox_type as "execution" | "app",
+                        sandbox_id: event.sandbox_id as string,
+                        timestamp: event.timestamp as number | undefined,
+                    };
+                    if (!workspaceSandboxId) {
+                        setWorkspaceContext(workspaceEvent.sandbox_type, workspaceEvent.sandbox_id, conversationId);
+                    }
+                    handleWorkspaceUpdate(workspaceEvent);
+                    refreshFiles([workspaceEvent.path]);
+                    if (
+                        (workspaceEvent.operation === "create" || workspaceEvent.operation === "modify")
+                        && workspaceEvent.sandbox_type === "app"
+                    ) {
+                        smartOpenComputer("file", false);
+                    }
+                },
+                onInterrupt: (interruptEvent: InterruptEvent, rawEvent: StreamEvent) => {
+                    setActiveInterrupt(interruptEvent);
+                    addStreamingEvent(rawEvent);
+                },
+                onUsage: (event: StreamEvent) => addStreamingEvent(event),
+                onError: (event: StreamEvent) => {
+                    const errorData = typeof event.data === "string" ? event.data : "Unknown error";
+                    ctx.fullContent = tChat("agent.error", { error: errorData });
+                    updateStreamingContent(ctx.fullContent);
+                    addAgentEvent(event);
+                },
+            };
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -1199,163 +1286,9 @@ export function ChatInterface() {
 
                         try {
                             const event = JSON.parse(jsonStr) as StreamEvent;
-
-                            if (event.type === "token" && (event.data || event.content)) {
-                                const tokenContent = (typeof event.data === "string" ? event.data : event.content) || "";
-                                handleTokenContent(tokenContent);
-                            } else if (event.type === "stage") {
-                                flushTokenBatch();
-                                const eventData = typeof event.data === "object" && event.data !== null ? event.data : null;
-                                const stageDescription = event.description || eventData?.description || null;
-                                updateAgentStage(stageDescription);
-                                addStreamingEvent(event);
-                            } else if (event.type === "tool_call") {
-                                const eventData = typeof event.data === "object" && event.data !== null ? event.data : null;
-                                const toolName = event.tool || eventData?.tool || "tool";
-                                const args = event.args || eventData?.args || {};
-                                const rawQuery = typeof args === "object" && args !== null ? (args as Record<string, unknown>).query : undefined;
-                                const queryArg = typeof rawQuery === "string" ? rawQuery : "web";
-                                if (isSearchTool(toolName)) {
-                                    updateAgentStage(tChat("agent.searching", { query: queryArg }));
-                                } else {
-                                    updateAgentStage(tChat("agent.executing", { tool: getTranslatedToolName(toolName) }));
-                                }
-                                addStreamingEvent(event);
-                            } else if (event.type === "tool_result") {
-                                addStreamingEvent(event);
-                            } else if (event.type === "routing") {
-                                addStreamingEvent(event);
-                            } else if (event.type === "handoff") {
-                                const target = event.target || "";
-                                updateAgentStage(tChat("agent.handoffTo", { target }));
-                                addStreamingEvent(event);
-                            } else if (event.type === "source") {
-                                addStreamingEvent(event);
-                                const newSource = parseSourceFromEvent(event, ctx.collectedSources.length);
-                                if (newSource) {
-                                    addStreamingSource(newSource);
-                                }
-                            } else if (event.type === "code_result") {
-                                addStreamingEvent(event);
-                            } else if (event.type === "image") {
-                                const imageData = parseImageFromEvent(event, ctx.collectedImages.length);
-                                if (imageData) {
-                                    const isDuplicate = ctx.collectedImages.some(img => img.index === imageData.index);
-                                    if (!isDuplicate) {
-                                        ctx.collectedImages.push(imageData);
-                                        ctx.collectedEvents.push(event);
-                                        // Auto-open generated image in file browser
-                                        const previewFile = generatedImageToFileAttachment(imageData);
-                                        if (previewFile) {
-                                            const entry = fileAttachmentToExternalEntry(previewFile, "generated-image");
-                                            if (previewFile.previewUrl?.startsWith("data:")) {
-                                                entry.base64Data = previewFile.previewUrl;
-                                            }
-                                            openFileInBrowser(entry);
-                                        }
-                                    }
-                                }
-                            } else if (event.type === "browser_stream") {
-                                // Browser stream handling is consolidated in agent-progress-store
-                                // (via addStreamingEvent → addEvent) to avoid triple-write state updates.
-                                addStreamingEvent(event);
-                            } else if (event.type === "browser_action") {
-                                // Browser action handling is consolidated in agent-progress-store.
-                                // We still emit a stage event for the streaming event timeline display.
-                                const action = event.action as string;
-                                const description = event.description as string;
-                                const target = event.target as string | undefined;
-                                const status = (event.status as string) || "running";
-                                const browserStageEvent: AgentEvent = {
-                                    type: "stage",
-                                    name: `browser_${action}`,
-                                    description: target ? `${description}: ${target}` : description,
-                                    status: status === "completed" ? "completed" : "running",
-                                };
-                                addStreamingEvent(browserStageEvent);
-                            } else if (event.type === "skill_output") {
-                                // Handle skill output events
-                                const skillId = event.skill_id as string;
-                                addStreamingEvent(event);
-                                updateAgentStage(tChat("agent.skillCompleted", { skill: skillId }));
-
-                                // Auto-open slide preview in sidebar
-                                if (skillId === "slide_generation" && event.output) {
-                                    const slideData = event.output as unknown as SlideOutput;
-                                    if (slideData.download_url) {
-                                        const slideEntry: ExternalFileEntry = {
-                                            id: `slide-${Date.now()}`,
-                                            name: slideData.title || "Presentation.pptx",
-                                            source: "generated-slide",
-                                            contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                            fileSize: 0,
-                                            downloadUrl: slideData.download_url,
-                                            slideOutput: slideData,
-                                            timestamp: Date.now(),
-                                        };
-                                        openFileInBrowser(slideEntry);
-                                    }
-                                }
-                            } else if (event.type === "workspace_update") {
-                                // Handle workspace file updates from sandbox (agent task)
-                                const workspaceEvent = {
-                                    type: "workspace_update" as const,
-                                    operation: event.operation as "create" | "modify" | "delete",
-                                    path: event.path as string,
-                                    name: event.name as string,
-                                    is_directory: event.is_directory as boolean,
-                                    size: event.size as number | undefined,
-                                    sandbox_type: event.sandbox_type as "execution" | "app",
-                                    sandbox_id: event.sandbox_id as string,
-                                    timestamp: event.timestamp as number | undefined,
-                                };
-
-                                // Set workspace context on first event
-                                if (!workspaceSandboxId) {
-                                    setWorkspaceContext(
-                                        workspaceEvent.sandbox_type,
-                                        workspaceEvent.sandbox_id,
-                                        conversationId
-                                    );
-                                }
-
-                                // Update file tree
-                                handleWorkspaceUpdate(workspaceEvent);
-
-                                // Auto-refresh file view with debounce + highlight changed paths
-                                refreshFiles([workspaceEvent.path]);
-
-                                // Only auto-open for app sandbox workspace updates
-                                // Execution sandbox file changes are typically noise (temp files, output)
-                                if (
-                                    (workspaceEvent.operation === "create" || workspaceEvent.operation === "modify") &&
-                                    workspaceEvent.sandbox_type === "app"
-                                ) {
-                                    smartOpenComputer("file", false);
-                                }
-                            } else if (event.type === "interrupt") {
-                                const interruptEvent: InterruptEvent = {
-                                    type: "interrupt",
-                                    interrupt_id: event.interrupt_id as string,
-                                    interrupt_type: event.interrupt_type as InterruptEvent["interrupt_type"],
-                                    title: event.title as string,
-                                    message: event.message as string,
-                                    options: event.options,
-                                    tool_info: event.tool_info,
-                                    default_action: event.default_action,
-                                    timeout_seconds: (event.timeout_seconds as number) || 120,
-                                    timestamp: (event.timestamp as number | undefined) ?? Date.now(),
-                                };
-                                setActiveInterrupt(interruptEvent);
-                                addStreamingEvent(event);
-                            } else if (event.type === "usage") {
-                                addStreamingEvent(event);
-                            } else if (event.type === "error") {
-                                const errorData = typeof event.data === "string" ? event.data : "Unknown error";
-                                ctx.fullContent = tChat("agent.error", { error: errorData });
-                                updateStreamingContent(ctx.fullContent);
-                                addAgentEvent(event);
-                            } else if (event.type === "complete") {
+                            const reduced = reduceStreamEvent(event, streamHandlers);
+                            if (reduced.shouldBreak) {
+                                streamComplete = true;
                                 break;
                             }
                         } catch (e) {
@@ -1365,6 +1298,7 @@ export function ChatInterface() {
                         continue;
                     }
                 }
+                if (streamComplete) break;
             }
 
             if (ctx.fullContent || ctx.collectedImages.length > 0) {

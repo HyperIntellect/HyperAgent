@@ -210,6 +210,7 @@ async def task_node(state: SupervisorState, config: dict | None = None) -> TaskO
             "skills": state.get("skills") or [],
             "scenario": state.get("scenario"),
             "depth": state.get("depth"),
+            "hitl_enabled": state.get("hitl_enabled", settings.hitl_enabled),
         }
 
         # Invoke task subgraph with timeout
@@ -523,6 +524,7 @@ class AgentSupervisor:
             Event dictionaries for streaming to clients
         """
         from app.agents.stream_processor import StreamProcessor
+        from app.config import settings
 
         effective_task_id = task_id or str(uuid.uuid4())
         effective_run_id = kwargs.get("run_id") or str(uuid.uuid4())
@@ -556,6 +558,7 @@ class AgentSupervisor:
             "execution_mode": kwargs.get("execution_mode", "auto"),
             "tier": effective_tier,
             "depth": effective_depth,
+            "hitl_enabled": settings.hitl_enabled,
         }
 
         # Add any extra kwargs (like depth, scenario for research)
@@ -567,8 +570,6 @@ class AgentSupervisor:
         # Create config with unique run_id for each request
         # Using a unique ID per request prevents checkpoint state (like events) from carrying over
         # Conversation history is passed explicitly via messages, not through checkpointing
-        from app.config import settings
-
         run_id = str(uuid.uuid4())  # Unique per request, not conversation
         thread_id = effective_task_id  # Still log with conversation ID
 
@@ -788,6 +789,8 @@ class AgentSupervisor:
         Returns:
             Final result dictionary with response
         """
+        from app.config import settings
+
         initial_state: SupervisorState = {
             "query": query,
             "mode": mode,
@@ -795,10 +798,9 @@ class AgentSupervisor:
             "handoff_count": 0,
             "handoff_history": [],
             "shared_memory": {},
+            "hitl_enabled": settings.hitl_enabled,
             **kwargs,
         }
-
-        from app.config import settings
 
         config = {
             "configurable": {"thread_id": str(uuid.uuid4())},

@@ -5,6 +5,7 @@ organized by category. Agents can request tools by category to get
 only the tools relevant to their specialization.
 """
 
+import importlib
 from enum import Enum
 from typing import Any
 
@@ -63,6 +64,32 @@ from app.core.logging import get_logger
 from app.sandbox import sandbox_file
 
 logger = get_logger(__name__)
+
+
+def _invalidate_cached_agent_tools() -> None:
+    """Invalidate module-level tool caches after dynamic registry changes.
+
+    Some agents cache the resolved tool list for KV-cache stability and speed.
+    When tools are registered/unregistered at runtime (e.g., MCP connect/disconnect),
+    those caches must be cleared so new tools become visible without restart.
+    """
+    invalidators = [
+        ("app.agents.subagents.task", "clear_tool_cache"),
+        ("app.agents.skills.builtin.deep_research_skill", "_clear_tool_cache"),
+    ]
+    for module_path, fn_name in invalidators:
+        try:
+            module = importlib.import_module(module_path)
+            invalidator = getattr(module, fn_name, None)
+            if callable(invalidator):
+                invalidator()
+        except Exception as e:
+            logger.debug(
+                "tool_cache_invalidation_skipped",
+                module=module_path,
+                function=fn_name,
+                error=str(e),
+            )
 
 
 class ToolCategory(str, Enum):
@@ -440,6 +467,7 @@ def register_tool(category: ToolCategory, tool: BaseTool) -> None:
             category=category.value,
             tool=tool.name,
         )
+        _invalidate_cached_agent_tools()
 
 
 def unregister_tool(category: ToolCategory, tool_name: str) -> bool:
@@ -464,6 +492,7 @@ def unregister_tool(category: ToolCategory, tool_name: str) -> bool:
             category=category.value,
             tool=tool_name,
         )
+        _invalidate_cached_agent_tools()
         return True
 
     return False

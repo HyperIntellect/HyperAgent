@@ -269,6 +269,11 @@
                 "app_run_command": "Run Command",
                 "app_get_preview_url": "Get Preview URL",
                 "AppPlan": "App Planning",
+                "file_read": "Read File",
+                "file_write": "Write File",
+                "file_str_replace": "Edit File",
+                "file_find_by_name": "Find File",
+                "file_find_in_content": "Search in Files",
                 "default": "Tool"
             },
             "stages": {
@@ -902,7 +907,6 @@
         "terminalOutput": "Terminal output",
         "scrollToBottom": "Scroll to bottom",
         "errorMessage": "An unexpected error occurred in the computer panel.",
-        "activityUsing": "HyperAgent is using",
         "activityIdle": "Idle",
         "executingCommand": "Executing command",
         "expandSteps": "Expand steps",

@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "clean": "rm -rf .next"
+    "clean": "rm -rf .next",
+    "replay:check": "node scripts/replay-stream-events.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

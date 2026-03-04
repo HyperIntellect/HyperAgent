@@ -26,6 +26,7 @@ import {
     Presentation,
     Download,
     Paperclip,
+    Maximize2,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
@@ -329,8 +330,104 @@ function ExternalFileItem({
 }
 
 /**
+ * Resolve a display-ready URL for an external file.
+ * Prefers base64Data (data URL), falls back to previewUrl.
+ */
+function resolveDisplayUrl(file: ExternalFileEntry): string | undefined {
+    return file.base64Data || file.previewUrl;
+}
+
+/**
+ * Detect whether a file is an image from its name or contentType.
+ */
+function isExternalImage(file: ExternalFileEntry): boolean {
+    const ext = file.name.split(".").pop()?.toLowerCase() || "";
+    return (
+        ["png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp"].includes(ext) ||
+        file.contentType?.startsWith("image/") === true
+    );
+}
+
+/**
+ * Detect whether a file is a PDF.
+ */
+function isExternalPdf(file: ExternalFileEntry): boolean {
+    const ext = file.name.split(".").pop()?.toLowerCase() || "";
+    return ext === "pdf" || file.contentType === "application/pdf";
+}
+
+/**
+ * Detect whether a file is a video.
+ */
+function isExternalVideo(file: ExternalFileEntry): boolean {
+    const ext = file.name.split(".").pop()?.toLowerCase() || "";
+    return (
+        ["mp4", "webm", "mov", "avi", "mkv"].includes(ext) ||
+        file.contentType?.startsWith("video/") === true
+    );
+}
+
+/**
+ * Detect whether a file is audio.
+ */
+function isExternalAudio(file: ExternalFileEntry): boolean {
+    const ext = file.name.split(".").pop()?.toLowerCase() || "";
+    return (
+        ["mp3", "wav", "ogg", "flac", "aac"].includes(ext) ||
+        file.contentType?.startsWith("audio/") === true
+    );
+}
+
+/**
+ * Get a short type label for badge display.
+ */
+function getFileTypeBadge(file: ExternalFileEntry): string {
+    if (file.source === "generated-slide") return "PPTX";
+    if (file.source === "generated-image") return "Image";
+    const ext = file.name.split(".").pop()?.toUpperCase();
+    return ext || "File";
+}
+
+/**
+ * Shared header for external file preview views.
+ */
+function ExternalFileHeader({
+    file,
+    onBack,
+    actions,
+}: {
+    file: ExternalFileEntry;
+    onBack: () => void;
+    actions?: React.ReactNode;
+}) {
+    const t = useTranslations("computer");
+    return (
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-secondary/20 shrink-0">
+            <button
+                onClick={onBack}
+                className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+            >
+                <ChevronLeft className="w-3.5 h-3.5" />
+                {t("workspace.title")}
+            </button>
+            <div className="flex items-center gap-2 min-w-0">
+                <div className="flex items-center gap-1.5 min-w-0">
+                    {getExternalFileIcon(file)}
+                    <span className="text-xs font-mono text-muted-foreground truncate max-w-[140px]">
+                        {file.name}
+                    </span>
+                    <Badge variant="subtle">{getFileTypeBadge(file)}</Badge>
+                </div>
+                {actions && <div className="flex items-center gap-0.5">{actions}</div>}
+            </div>
+        </div>
+    );
+}
+
+/**
  * Content view for an external file (upload, generated image, generated slide).
- * Resolves content from base64Data, previewUrl, or renders slide info.
+ * Renders images/PDFs/videos/audio directly from URL — no unnecessary fetch+base64 conversion.
+ * Only fetches content for text/code files that need syntax highlighting.
  */
 function ExternalFileContentView({
     file,
@@ -343,183 +440,310 @@ function ExternalFileContentView({
 }) {
     const t = useTranslations("computer");
     const tPreview = useTranslations("preview");
-    const [content, setContent] = useState<string | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const [isBinary, setIsBinary] = useState(false);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [imgLoading, setImgLoading] = useState(true);
+    const [imgError, setImgError] = useState(false);
 
+    // For text/code files: fetch content as text
+    const [textContent, setTextContent] = useState<string | null>(null);
+    const [textLoading, setTextLoading] = useState(false);
+    const [textError, setTextError] = useState<string | null>(null);
+
+    const displayUrl = resolveDisplayUrl(file);
+    const downloadUrl = file.downloadUrl || displayUrl;
+
+    // Determine if this is a text/code file that needs fetching
+    const isImage = isExternalImage(file);
+    const isPdf = isExternalPdf(file);
+    const isVideo = isExternalVideo(file);
+    const isAudio = isExternalAudio(file);
+    const isSlide = file.source === "generated-slide";
+    const isTextFile = !isImage && !isPdf && !isVideo && !isAudio && !isSlide;
+
+    // Synchronously decode data-URL content for text files (no effect needed)
+    const dataUrlText = useMemo(() => {
+        if (!isTextFile || !displayUrl?.startsWith("data:")) return undefined;
+        try {
+            const parts = displayUrl.split(",");
+            const meta = parts[0] || "";
+            const raw = parts.slice(1).join(",");
+            return meta.includes("base64") ? atob(raw) : decodeURIComponent(raw);
+        } catch {
+            return undefined;
+        }
+    }, [isTextFile, displayUrl]);
+
+    // Fetch text content from HTTP URLs for text/code files
+    const needsFetch = isTextFile && !!displayUrl && !displayUrl.startsWith("data:");
     useEffect(() => {
+        if (!needsFetch) return;
+
         let cancelled = false;
-        setIsLoading(true);
-        setError(null);
-        setContent(null);
-        setIsBinary(false);
+        /* eslint-disable react-hooks/set-state-in-effect -- Standard fetch-init pattern */
+        setTextLoading(true);
+        setTextError(null);
+        setTextContent(null);
+        /* eslint-enable react-hooks/set-state-in-effect */
 
-        const load = async () => {
-            try {
-                // For generated images with base64 data
-                if (file.base64Data) {
-                    // If it's already a data URL, extract the base64 part
-                    if (file.base64Data.startsWith("data:")) {
-                        const base64Part = file.base64Data.split(",")[1] || "";
-                        if (!cancelled) {
-                            setContent(base64Part);
-                            setIsBinary(true);
-                            setIsLoading(false);
-                        }
-                        return;
-                    }
-                    if (!cancelled) {
-                        setContent(file.base64Data);
-                        setIsBinary(true);
-                        setIsLoading(false);
-                    }
-                    return;
-                }
-
-                // For files with a preview URL (images, uploads)
-                if (file.previewUrl) {
-                    // If it's a data URL, extract base64
-                    if (file.previewUrl.startsWith("data:")) {
-                        const base64Part = file.previewUrl.split(",")[1] || "";
-                        if (!cancelled) {
-                            setContent(base64Part);
-                            setIsBinary(true);
-                            setIsLoading(false);
-                        }
-                        return;
-                    }
-
-                    // Fetch from URL
-                    const res = await fetch(file.previewUrl);
-                    if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
-                    const ct = res.headers.get("content-type") || file.contentType || "";
-                    const isTextLike = ct.startsWith("text/") || ct.includes("json") || ct.includes("xml") || ct.includes("javascript");
-
-                    if (isTextLike) {
-                        const text = await res.text();
-                        if (!cancelled) {
-                            setContent(text);
-                            setIsBinary(false);
-                            setIsLoading(false);
-                        }
-                    } else {
-                        const buf = await res.arrayBuffer();
-                        const bytes = new Uint8Array(buf);
-                        let binary = "";
-                        for (let i = 0; i < bytes.length; i++) {
-                            binary += String.fromCharCode(bytes[i]);
-                        }
-                        if (!cancelled) {
-                            setContent(btoa(binary));
-                            setIsBinary(true);
-                            setIsLoading(false);
-                        }
-                    }
-                    return;
-                }
-
-                // For slides without preview URL — show slide info
-                if (file.source === "generated-slide") {
-                    if (!cancelled) {
-                        setContent(null);
-                        setIsLoading(false);
-                    }
-                    return;
-                }
-
+        fetch(displayUrl!)
+            .then(async (res) => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const text = await res.text();
                 if (!cancelled) {
-                    setContent(null);
-                    setIsLoading(false);
+                    setTextContent(text);
+                    setTextLoading(false);
                 }
-            } catch (err) {
+            })
+            .catch((err) => {
                 if (!cancelled) {
-                    setError(err instanceof Error ? err.message : t("workspace.failedToLoad"));
-                    setIsLoading(false);
+                    setTextError(err instanceof Error ? err.message : t("workspace.failedToLoad"));
+                    setTextLoading(false);
                 }
-            }
-        };
+            });
 
-        load();
         return () => { cancelled = true; };
-    }, [file]);
+    }, [needsFetch, displayUrl, t]);
 
-    // For slides, render a special view
-    if (!isLoading && !error && file.source === "generated-slide") {
-        const slideData = file.slideOutput as SlideOutput | undefined;
+    // Resolve final text: prefer synchronous data-URL decode, then fetched content
+    const resolvedTextContent = dataUrlText ?? textContent;
+
+    // ── Image preview ──────────────────────────────────────────────
+    if (isImage && displayUrl) {
         return (
             <div className={cn("flex-1 flex flex-col overflow-hidden", className)}>
-                <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-secondary/20">
-                    <button
-                        onClick={onBack}
-                        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                    >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                        {t("workspace.title")}
-                    </button>
-                </div>
-                <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
-                    <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-                        <Presentation className="w-6 h-6 text-primary" />
-                    </div>
-                    <div className="text-center">
-                        <p className="text-sm font-semibold text-foreground">{file.name}</p>
-                        {slideData?.slide_count && (
-                            <p className="text-xs text-muted-foreground mt-1">
-                                {tPreview("slideCountBadge", { count: slideData.slide_count })}
-                            </p>
-                        )}
-                    </div>
-                    {(file.downloadUrl || slideData?.download_url) && (
-                        <a
-                            href={file.downloadUrl || slideData?.download_url}
-                            download
-                            className={cn(
-                                "inline-flex items-center gap-1.5",
-                                "px-4 py-2 text-sm font-medium rounded-lg",
-                                "bg-primary text-primary-foreground",
-                                "hover:bg-primary/90 transition-colors"
+                <ExternalFileHeader
+                    file={file}
+                    onBack={onBack}
+                    actions={
+                        <>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => setIsFullscreen(true)}
+                                title={t("fullscreen")}
+                            >
+                                <Maximize2 className="w-3.5 h-3.5" />
+                            </Button>
+                            {downloadUrl && (
+                                <a href={downloadUrl} download={file.name}>
+                                    <Button variant="ghost" size="icon" className="h-8 w-8" title={t("workspace.download")}>
+                                        <Download className="w-3.5 h-3.5" />
+                                    </Button>
+                                </a>
                             )}
-                        >
-                            <Download className="w-4 h-4" />
-                            {t("workspace.download")}
-                        </a>
-                    )}
-                    {/* Slide outline */}
-                    {slideData?.slide_outline && slideData.slide_outline.length > 0 && (
-                        <div className="w-full max-w-sm space-y-2 mt-2">
-                            {slideData.slide_outline.map((slide, i) => (
-                                <div key={i} className="px-3 py-2 rounded-lg bg-secondary/30 border border-border/30">
-                                    <p className="text-xs font-medium text-foreground">{slide.title}</p>
-                                    {slide.subtitle && (
-                                        <p className="text-xs text-muted-foreground mt-0.5">{slide.subtitle}</p>
-                                    )}
-                                </div>
-                            ))}
+                        </>
+                    }
+                />
+                <div className="flex-1 flex items-center justify-center p-4 bg-[repeating-conic-gradient(var(--color-secondary)_0%_25%,transparent_0%_50%)] bg-[length:16px_16px]">
+                    {imgLoading && (
+                        <div className="absolute inset-0 flex items-center justify-center">
+                            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
                         </div>
                     )}
+                    {imgError ? (
+                        <div className="flex flex-col items-center gap-3">
+                            <div className="w-12 h-12 rounded-xl bg-destructive/10 flex items-center justify-center">
+                                <FileImage className="w-6 h-6 text-destructive" />
+                            </div>
+                            <p className="text-sm text-muted-foreground">{t("workspace.failedToLoad")}</p>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => { setImgError(false); setImgLoading(true); }}
+                            >
+                                <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                                {t("workspace.reload")}
+                            </Button>
+                        </div>
+                    ) : (
+                        <img
+                            key={imgError ? "retry" : "img"}
+                            src={displayUrl}
+                            alt={file.name}
+                            className={cn(
+                                "max-w-full max-h-full object-contain rounded-lg cursor-pointer transition-opacity duration-200",
+                                imgLoading ? "opacity-0" : "opacity-100"
+                            )}
+                            onLoad={() => setImgLoading(false)}
+                            onError={() => { setImgLoading(false); setImgError(true); }}
+                            onClick={() => setIsFullscreen(true)}
+                        />
+                    )}
+                </div>
+                {isFullscreen && (
+                    <div
+                        className="fixed inset-0 z-50 bg-background/98 animate-in fade-in duration-200"
+                        onClick={() => setIsFullscreen(false)}
+                    >
+                        <div className="h-full flex flex-col p-4">
+                            <div className="flex items-center justify-between mb-4">
+                                <span className="text-sm font-medium truncate">{file.name}</span>
+                                <div className="flex items-center gap-2">
+                                    {downloadUrl && (
+                                        <a
+                                            href={downloadUrl}
+                                            download={file.name}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-secondary/60 hover:bg-secondary transition-colors"
+                                        >
+                                            <Download className="w-4 h-4" />
+                                        </a>
+                                    )}
+                                    <button
+                                        onClick={() => setIsFullscreen(false)}
+                                        className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-muted hover:bg-muted/80 transition-colors"
+                                    >
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+                            <div
+                                className="flex-1 overflow-auto flex items-center justify-center"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <img
+                                    src={displayUrl}
+                                    alt={file.name}
+                                    className="max-w-none h-auto"
+                                    style={{ maxHeight: "calc(100vh - 100px)" }}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // ── PDF preview ────────────────────────────────────────────────
+    if (isPdf && displayUrl) {
+        return (
+            <div className={cn("flex-1 flex flex-col overflow-hidden", className)}>
+                <ExternalFileHeader
+                    file={file}
+                    onBack={onBack}
+                    actions={
+                        downloadUrl ? (
+                            <a href={downloadUrl} download={file.name}>
+                                <Button variant="ghost" size="icon" className="h-8 w-8" title={t("workspace.download")}>
+                                    <Download className="w-3.5 h-3.5" />
+                                </Button>
+                            </a>
+                        ) : undefined
+                    }
+                />
+                <iframe
+                    src={`${displayUrl}#view=FitH&toolbar=0`}
+                    className="flex-1 w-full border-0"
+                    title={file.name}
+                />
+            </div>
+        );
+    }
+
+    // ── Video preview ──────────────────────────────────────────────
+    if (isVideo && displayUrl) {
+        return (
+            <div className={cn("flex-1 flex flex-col overflow-hidden", className)}>
+                <ExternalFileHeader file={file} onBack={onBack} />
+                <div className="flex-1 flex items-center justify-center p-4">
+                    <video
+                        controls
+                        className="max-w-full max-h-full rounded-lg"
+                        src={displayUrl}
+                    />
                 </div>
             </div>
         );
     }
 
+    // ── Audio preview ──────────────────────────────────────────────
+    if (isAudio && displayUrl) {
+        return (
+            <div className={cn("flex-1 flex flex-col overflow-hidden", className)}>
+                <ExternalFileHeader file={file} onBack={onBack} />
+                <div className="flex-1 flex items-center justify-center p-8">
+                    <audio controls className="w-full max-w-md" src={displayUrl} />
+                </div>
+            </div>
+        );
+    }
+
+    // ── Slide preview ──────────────────────────────────────────────
+    if (isSlide) {
+        const slideData = file.slideOutput as SlideOutput | undefined;
+        return (
+            <div className={cn("flex-1 flex flex-col overflow-hidden", className)}>
+                <ExternalFileHeader file={file} onBack={onBack} />
+                <ScrollArea className="flex-1">
+                    <div className="flex flex-col items-center p-6 gap-4">
+                        <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+                            <Presentation className="w-6 h-6 text-primary" />
+                        </div>
+                        <div className="text-center">
+                            <p className="text-sm font-semibold text-foreground">{file.name}</p>
+                            {slideData?.slide_count && (
+                                <p className="text-xs text-muted-foreground mt-1">
+                                    {tPreview("slideCountBadge", { count: slideData.slide_count })}
+                                </p>
+                            )}
+                        </div>
+                        {(file.downloadUrl || slideData?.download_url) && (
+                            <a
+                                href={file.downloadUrl || slideData?.download_url}
+                                download
+                                className={cn(
+                                    "inline-flex items-center gap-1.5",
+                                    "px-4 py-2 text-sm font-medium rounded-lg",
+                                    "bg-primary text-primary-foreground",
+                                    "hover:bg-primary/90 transition-colors"
+                                )}
+                            >
+                                <Download className="w-4 h-4" />
+                                {t("workspace.download")}
+                            </a>
+                        )}
+                        {slideData?.slide_outline && slideData.slide_outline.length > 0 && (
+                            <div className="w-full max-w-sm space-y-2 mt-2">
+                                {slideData.slide_outline.map((slide, i) => (
+                                    <div key={i} className="px-3 py-2 rounded-lg bg-secondary/30 border border-border/30">
+                                        <p className="text-xs font-medium text-foreground">{slide.title}</p>
+                                        {slide.subtitle && (
+                                            <p className="text-xs text-muted-foreground mt-0.5">{slide.subtitle}</p>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </ScrollArea>
+            </div>
+        );
+    }
+
+    // ── Text/code files: render via ComputerFileContent ──
     return (
         <div className={cn("flex-1 flex flex-col overflow-hidden", className)}>
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-secondary/20">
-                <button
-                    onClick={onBack}
-                    className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                >
-                    <ChevronLeft className="w-3.5 h-3.5" />
-                    {t("workspace.title")}
-                </button>
-            </div>
+            <ExternalFileHeader
+                file={file}
+                onBack={onBack}
+                actions={
+                    downloadUrl ? (
+                        <a href={downloadUrl} download={file.name}>
+                            <Button variant="ghost" size="icon" className="h-8 w-8" title={t("workspace.download")}>
+                                <Download className="w-3.5 h-3.5" />
+                            </Button>
+                        </a>
+                    ) : undefined
+                }
+            />
             <ComputerFileContent
                 filename={file.name}
-                content={content}
-                isLoading={isLoading}
-                error={error}
-                isBinary={isBinary}
+                content={resolvedTextContent}
+                isLoading={textLoading && !dataUrlText}
+                error={textError}
+                isBinary={false}
                 className="flex-1"
             />
         </div>
