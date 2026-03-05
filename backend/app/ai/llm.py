@@ -1,3 +1,4 @@
+import threading
 from typing import Any, Sequence
 
 from langchain_anthropic import ChatAnthropic
@@ -80,6 +81,7 @@ class LLMService:
 
     # Cache LLM clients by (provider, model) to avoid re-creating HTTP clients
     _cache: dict[tuple[str, str], BaseChatModel] = {}
+    _cache_lock: threading.Lock = threading.Lock()
 
     def _get_anthropic(self, model: str | None = None) -> ChatAnthropic:
         """Get Anthropic client."""
@@ -189,21 +191,23 @@ class LLMService:
                 )
 
         cache_key = (provider, effective_model)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
 
-        if provider == "anthropic":
-            client = self._get_anthropic(model)
-        elif provider == "openai":
-            client = self._get_openai(model)
-        elif provider == "gemini":
-            client = self._get_gemini(model)
-        else:
-            client = self._get_custom_openai_compatible(provider, model)
+        with self._cache_lock:
+            if cache_key in self._cache:
+                return self._cache[cache_key]
 
-        logger.debug("llm_client_created", provider=provider, model=effective_model)
-        self._cache[cache_key] = client
-        return client
+            if provider == "anthropic":
+                client = self._get_anthropic(model)
+            elif provider == "openai":
+                client = self._get_openai(model)
+            elif provider == "gemini":
+                client = self._get_gemini(model)
+            else:
+                client = self._get_custom_openai_compatible(provider, model)
+
+            logger.debug("llm_client_created", provider=provider, model=effective_model)
+            self._cache[cache_key] = client
+            return client
 
     def get_llm_for_tier(
         self,

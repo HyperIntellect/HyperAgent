@@ -16,9 +16,12 @@ import { cn } from "@/lib/utils";
 
 /**
  * Validate that a URL is safe for use in iframes and window.open.
- * Only allows http: and https: protocols, rejecting javascript:, data:, blob:, etc.
+ * Allows http:, https: protocols and relative API proxy paths.
+ * Rejects javascript:, data:, blob:, etc.
  */
 function isSafeUrl(url: string): boolean {
+  // Allow relative API proxy paths (used by BoxLite sandbox provider)
+  if (url.startsWith("/api/")) return true;
   try {
     const parsed = new URL(url);
     return parsed.protocol === "http:" || parsed.protocol === "https:";
@@ -29,6 +32,7 @@ function isSafeUrl(url: string): boolean {
 
 interface AppPreviewPanelProps {
   previewUrl: string;
+  displayUrl?: string;
   template?: string;
   className?: string;
   onClose?: () => void;
@@ -40,6 +44,7 @@ interface AppPreviewPanelProps {
  */
 export function AppPreviewPanel({
   previewUrl,
+  displayUrl: displayUrlProp,
   template,
   className,
   onClose,
@@ -85,8 +90,8 @@ export function AppPreviewPanel({
 
   const safeUrl = isSafeUrl(previewUrl);
 
-  // Extract display URL (remove protocol for display)
-  const displayUrl = previewUrl.replace(/^https?:\/\//, "");
+  // Use friendly display URL when available, falling back to preview URL
+  const displayUrl = (displayUrlProp || previewUrl).replace(/^https?:\/\//, "");
 
   return (
     <div
@@ -224,10 +229,12 @@ export function AppPreviewPanel({
  */
 export function InlineAppPreview({
   previewUrl,
+  displayUrl: displayUrlProp,
   template,
   className,
 }: {
   previewUrl: string;
+  displayUrl?: string;
   template?: string;
   className?: string;
 }) {
@@ -261,8 +268,8 @@ export function InlineAppPreview({
 
   const safeUrl = isSafeUrl(previewUrl);
 
-  // Extract display URL
-  const displayUrl = previewUrl.replace(/^https?:\/\//, "");
+  // Use friendly display URL when available, falling back to preview URL
+  const displayUrl = (displayUrlProp || previewUrl).replace(/^https?:\/\//, "");
 
   return (
     <div

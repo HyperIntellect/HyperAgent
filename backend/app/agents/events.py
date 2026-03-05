@@ -82,6 +82,9 @@ class EventType(str, Enum):
     PLAN_OVERVIEW = "plan_overview"
     PLAN_STEP_COMPLETED = "plan_step_completed"
 
+    # Step activity events (plan-execution binding)
+    STEP_ACTIVITY = "step_activity"
+
     # Todo-list persistence events (sandbox todo.md updates)
     TODO_UPDATE = "todo_update"
 
@@ -234,6 +237,9 @@ class BrowserStreamEvent(BaseModel):
     stream_url: str = Field(..., description="URL to view the browser stream")
     sandbox_id: str = Field(..., description="Sandbox identifier")
     auth_key: str | None = Field(default=None, description="Authentication key if required")
+    display_url: str | None = Field(
+        default=None, description="User-friendly URL for address bar"
+    )
     timestamp: int = Field(default_factory=_timestamp, description="Event timestamp in ms")
 
 
@@ -479,7 +485,28 @@ class PlanStepCompletedEvent(BaseModel):
     status: str = Field(..., description="completed or failed")
     completed_steps: int = Field(..., description="Total completed steps so far")
     total_steps: int = Field(..., description="Total number of steps")
+    result_summary: str = Field(default="", description="Brief summary of step results")
+    duration_ms: int | None = Field(default=None, description="Step duration in milliseconds")
     timestamp: int = Field(default_factory=_timestamp, description="Event timestamp in ms")
+
+
+class StepActivityEvent(BaseModel):
+    """Event that brackets execution within plan step boundaries.
+
+    Emitted when a plan step starts running or completes/fails,
+    enabling the frontend to group tool_call/stage events under
+    the correct plan step.
+    """
+
+    type: Literal["step_activity"] = "step_activity"
+    step_index: int = Field(..., description="0-based plan step index")
+    step_title: str = Field(..., description="Step title for display")
+    status: str = Field(..., description="running, completed, or failed")
+    result_summary: str = Field(default="", description="Brief summary (populated on completed)")
+    duration_ms: int | None = Field(
+        default=None, description="Step duration in ms"
+    )
+    timestamp: int = Field(default_factory=_timestamp)
 
 
 class UsageEvent(BaseModel):
@@ -729,6 +756,7 @@ def browser_stream(
     stream_url: str,
     sandbox_id: str,
     auth_key: str | None = None,
+    display_url: str | None = None,
 ) -> dict[str, Any]:
     """Create a browser stream event dictionary.
 
@@ -739,6 +767,7 @@ def browser_stream(
         stream_url: URL to view the browser stream
         sandbox_id: Sandbox identifier
         auth_key: Authentication key if required
+        display_url: User-friendly URL for address bar display
 
     Returns:
         Browser stream event dictionary
@@ -747,6 +776,7 @@ def browser_stream(
         stream_url=stream_url,
         sandbox_id=sandbox_id,
         auth_key=auth_key,
+        display_url=display_url,
     ).model_dump()
 
 
@@ -1114,6 +1144,8 @@ def plan_step_completed(
     status: str,
     completed_steps: int,
     total_steps: int,
+    result_summary: str = "",
+    duration_ms: int | None = None,
 ) -> dict[str, Any]:
     """Create a plan step completed event dictionary.
 
@@ -1122,6 +1154,8 @@ def plan_step_completed(
         status: Step status (completed or failed)
         completed_steps: Total completed steps so far
         total_steps: Total number of steps
+        result_summary: Brief summary of step results
+        duration_ms: Step duration in milliseconds
 
     Returns:
         Plan step completed event dictionary
@@ -1131,6 +1165,36 @@ def plan_step_completed(
         status=status,
         completed_steps=completed_steps,
         total_steps=total_steps,
+        result_summary=result_summary,
+        duration_ms=duration_ms,
+    ).model_dump()
+
+
+def step_activity(
+    step_index: int,
+    step_title: str,
+    status: str,
+    result_summary: str = "",
+    duration_ms: int | None = None,
+) -> dict[str, Any]:
+    """Create a step activity event dictionary.
+
+    Args:
+        step_index: 0-based plan step index
+        step_title: Step title for display
+        status: Step status (running, completed, failed)
+        result_summary: Brief summary (populated on completed)
+        duration_ms: Step duration in ms (populated on completed)
+
+    Returns:
+        Step activity event dictionary
+    """
+    return StepActivityEvent(
+        step_index=step_index,
+        step_title=step_title,
+        status=status,
+        result_summary=result_summary,
+        duration_ms=duration_ms,
     ).model_dump()
 
 

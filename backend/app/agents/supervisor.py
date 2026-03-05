@@ -38,7 +38,6 @@ DEFAULT_SUBGRAPH_TIMEOUT = 300  # 5 minutes
 # The code is still executed, and results are shown via "summarize" stage
 
 
-
 async def router_node(state: SupervisorState) -> RouterOutput:
     """Route the query to the appropriate agent.
 
@@ -85,6 +84,7 @@ async def router_node(state: SupervisorState) -> RouterOutput:
                 restored = await _restore_handoff_artifacts(state, handoff_artifacts)
                 if restored:
                     from app.sandbox.artifact_transfer import format_artifact_summary
+
                     artifact_summary = format_artifact_summary(handoff_artifacts)
                     logger.info(
                         "handoff_artifacts_restored",
@@ -181,14 +181,17 @@ async def task_node(state: SupervisorState, config: dict | None = None) -> TaskO
             )
             return TaskOutput(
                 response=result.synthesis,
-                events=parallel_events + [{
-                    "type": "reasoning",
-                    "thinking": (
-                        f"Executed {result.successful_count + result.failed_count} sub-tasks in parallel; "
-                        f"{result.successful_count} succeeded, {result.failed_count} failed."
-                    ),
-                    "context": "parallel_execution",
-                }],
+                events=parallel_events
+                + [
+                    {
+                        "type": "reasoning",
+                        "thinking": (
+                            f"Executed {result.successful_count + result.failed_count} sub-tasks in parallel; "
+                            f"{result.successful_count} succeeded, {result.failed_count} failed."
+                        ),
+                        "context": "parallel_execution",
+                    }
+                ],
             )
 
         # Build input state with handoff context if present
@@ -228,7 +231,13 @@ async def task_node(state: SupervisorState, config: dict | None = None) -> TaskO
             "events": result.get("events", []),
         }
 
-        await _process_handoff(output, state, result.get("pending_handoff"), "task")
+        handoff_updates = await _process_handoff(
+            state=state,
+            handoff=result.get("pending_handoff"),
+            agent_name="task",
+            current_response=output.get("response", ""),
+        )
+        output = {**output, **handoff_updates}
 
         return output
 
@@ -334,50 +343,61 @@ def _can_handoff(state: SupervisorState, target_agent: str) -> bool:
 
 
 async def _process_handoff(
-    output: dict,
     state: SupervisorState,
     handoff: dict | None,
     agent_name: str,
-) -> None:
-    """Validate and apply handoff to output dict, or set fallback response.
+    current_response: str = "",
+) -> dict:
+    """Validate handoff and return a dict of state updates.
 
     Collects sandbox artifacts from the source agent when a valid handoff
     is detected. Artifact transfer is best-effort; the handoff proceeds
     even if artifact collection fails.
 
+    Returns a dict of updates to merge into the caller's output. Returns
+    an empty dict when there is no handoff to process.
+
     Args:
-        output: Output dict to update in-place
         state: Current supervisor state
         handoff: Handoff info dict from agent result, or None
         agent_name: Name of the current agent (for logging)
+        current_response: The current response string (used to decide
+            whether to set a fallback response when handoff is blocked)
+
+    Returns:
+        Dict of output updates to merge into the caller's output
     """
     if not handoff:
-        return
+        return {}
 
     if _can_handoff(state, handoff.get("target_agent", "")):
         # Attempt to collect artifacts from the source agent's sandbox
         artifacts = await _collect_handoff_artifacts(state)
-        if artifacts:
-            handoff["handoff_artifacts"] = artifacts
+        enriched_handoff = {**handoff, "handoff_artifacts": artifacts} if artifacts else handoff
 
-        output["pending_handoff"] = handoff
-        output["handoff_count"] = state.get("handoff_count", 0) + 1
-        output["handoff_history"] = update_handoff_history(
-            history=list(state.get("handoff_history") or []),
-            source_agent=state.get("active_agent") or "task",
-            handoff=handoff,
-        )
-    else:
-        logger.warning(
-            "handoff_blocked",
-            agent_name=agent_name,
-            target=handoff.get("target_agent", ""),
-        )
-        if not output.get("response"):
-            output["response"] = (
+        return {
+            "pending_handoff": enriched_handoff,
+            "handoff_count": state.get("handoff_count", 0) + 1,
+            "handoff_history": update_handoff_history(
+                history=list(state.get("handoff_history") or []),
+                source_agent=state.get("active_agent") or "task",
+                handoff=enriched_handoff,
+            ),
+        }
+
+    logger.warning(
+        "handoff_blocked",
+        agent_name=agent_name,
+        target=handoff.get("target_agent", ""),
+    )
+    if not current_response:
+        return {
+            "response": (
                 "I couldn't hand off that request, so I'm continuing here. "
                 "Please share more details or rephrase."
-            )
+            ),
+        }
+    return {}
 
 
 async def _collect_handoff_artifacts(state: SupervisorState) -> list[dict]:
@@ -479,7 +499,6 @@ def create_supervisor_graph(checkpointer=None):
 # =============================================================================
 # Factory Functions (for better testability and thread safety)
 # =============================================================================
-
 
 
 class AgentSupervisor:
@@ -630,6 +649,7 @@ class AgentSupervisor:
         budget_exhausted = False
 
         import time as _time
+
         _run_start = _time.monotonic()
 
         try:
@@ -653,7 +673,10 @@ class AgentSupervisor:
                         tool_calls_count=tool_calls_count,
                         elapsed_seconds=elapsed_seconds,
                     )
-                    if budget_state["pressure_ratio"] >= 0.8 and budget_state["pressure_ratio"] < 1.0:
+                    if (
+                        budget_state["pressure_ratio"] >= 0.8
+                        and budget_state["pressure_ratio"] < 1.0
+                    ):
                         yield {
                             "type": "reasoning",
                             "thinking": "Budget pressure rising; execution may degrade depth or stop soon.",
@@ -705,15 +728,18 @@ class AgentSupervisor:
             if user_id and messages:
                 # Collect episodic context from the run
                 _duration_s = round(_time.monotonic() - _run_start, 1)
-                _tools_used = sorted({
-                    info.get("tool", "")
-                    for info in processor.pending_tool_calls.values()
-                    if info.get("tool")
-                } | {
-                    info.get("tool", "")
-                    for info in getattr(processor, "_completed_tools", [])
-                    if info.get("tool")
-                })
+                _tools_used = sorted(
+                    {
+                        info.get("tool", "")
+                        for info in processor.pending_tool_calls.values()
+                        if info.get("tool")
+                    }
+                    | {
+                        info.get("tool", "")
+                        for info in getattr(processor, "_completed_tools", [])
+                        if info.get("tool")
+                    }
+                )
                 # Also collect from emitted_tool_call_ids tracking
                 _tool_names_from_calls = set()
                 for _tc_id, _tc_info in processor.pending_tool_calls.items():
@@ -813,6 +839,8 @@ class AgentSupervisor:
 
 # Global instance for convenience
 agent_supervisor = AgentSupervisor()
+
+
 def _derive_budget_pressure_state(
     budget: dict[str, Any],
     usage_totals: dict[str, Any],
@@ -892,9 +920,13 @@ def _apply_budget_pressure_defaults(
             {
                 "reason": reason or "budget_pressure",
                 "applied_tier": target_tier,
-                "applied_depth": str(target_depth.value if hasattr(target_depth, "value") else target_depth),
+                "applied_depth": str(
+                    target_depth.value if hasattr(target_depth, "value") else target_depth
+                ),
                 "original_tier": normalized_tier,
-                "original_depth": str(depth.value if hasattr(depth, "value") else depth) if depth else None,
+                "original_depth": str(depth.value if hasattr(depth, "value") else depth)
+                if depth
+                else None,
             },
         )
 

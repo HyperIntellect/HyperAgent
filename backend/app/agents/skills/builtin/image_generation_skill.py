@@ -53,14 +53,14 @@ class ImageGenerationSkill(ToolSkill):
             SkillParameter(
                 name="model",
                 type="string",
-                description="Model: gemini-3-pro-image-preview, dall-e-3, or dall-e-2",
+                description="Leave empty to use server default. Only specify if user requests a specific model.",
                 required=False,
                 default=None,
             ),
             SkillParameter(
                 name="quality",
                 type="string",
-                description="Quality for DALL-E 3: standard or hd",
+                description="Image quality: standard or hd (provider support varies)",
                 required=False,
                 default="standard",
             ),

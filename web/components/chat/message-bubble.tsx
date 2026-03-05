@@ -16,6 +16,7 @@ import { useComputerStore } from "@/lib/stores/computer-store";
 import { fileAttachmentToExternalEntry } from "@/lib/utils/streaming-helpers";
 import { TaskProgressPanel } from "@/components/ui/task-progress-panel";
 import { TaskPlanPanel, type TaskPlan } from "@/components/ui/task-plan-panel";
+import { UnifiedProgressPanel } from "@/components/progress/unified-progress-panel";
 import { InlineAppPreview } from "@/components/ui/app-preview-panel";
 import { SlideOutputPanel, type SlideOutput } from "./slide-output-panel";
 import { TypingIndicator } from "./typing-indicator";
@@ -126,14 +127,17 @@ function extractTaskPlans(events: (TimestampedEvent | AgentEvent)[]): TaskPlan[]
 
 interface AppPreview {
     url: string;
+    displayUrl?: string;
     template?: string;
 }
 
 /**
- * Validate that a URL uses a safe protocol (http/https only).
+ * Validate that a URL uses a safe protocol (http/https only) or is a relative API path.
  * Rejects javascript:, data:, blob:, and other dangerous protocols to prevent stored XSS.
  */
 function isSafePreviewUrl(url: string): boolean {
+    // Allow relative API proxy paths (used by BoxLite sandbox provider)
+    if (url.startsWith("/api/")) return true;
     try {
         const parsed = new URL(url);
         return parsed.protocol === "http:" || parsed.protocol === "https:";
@@ -164,6 +168,7 @@ function extractAppPreviews(events: (TimestampedEvent | AgentEvent)[]): AppPrevi
                     if (parsed.preview_url && typeof parsed.preview_url === "string" && isSafePreviewUrl(parsed.preview_url)) {
                         previews.push({
                             url: parsed.preview_url,
+                            displayUrl: parsed.display_url as string | undefined,
                             template: parsed.template as string | undefined,
                         });
                     }
@@ -175,6 +180,7 @@ function extractAppPreviews(events: (TimestampedEvent | AgentEvent)[]): AppPrevi
                     if (output.preview_url && typeof output.preview_url === "string" && isSafePreviewUrl(output.preview_url)) {
                         previews.push({
                             url: output.preview_url,
+                            displayUrl: output.display_url as string | undefined,
                             template: output.template as string | undefined,
                         });
                     }
@@ -192,6 +198,7 @@ function extractAppPreviews(events: (TimestampedEvent | AgentEvent)[]): AppPrevi
                 if (output.preview_url && typeof output.preview_url === "string" && isSafePreviewUrl(output.preview_url)) {
                     previews.push({
                         url: output.preview_url,
+                        displayUrl: output.display_url as string | undefined,
                         template: output.template as string | undefined,
                     });
                 }
@@ -372,16 +379,6 @@ export const MessageBubble = memo(function MessageBubble({
                     <TypingIndicator />
                 )}
 
-                {/* Show live agent progress inline during streaming - replaces typing indicator */}
-                {isStreaming && willProgressPanelRender && streamingEvents && (
-                    <TaskProgressPanel
-                        events={streamingEvents}
-                        sources={streamingSources}
-                        isStreaming={isStreaming}
-                        agentType={agentType}
-                    />
-                )}
-
                 <div
                     className={cn(
                         "prose prose-neutral dark:prose-invert max-w-none",
@@ -401,6 +398,16 @@ export const MessageBubble = memo(function MessageBubble({
                     {/* Show streaming cursor at the end of content */}
                     {isStreaming && message.content && <StreamingCursor />}
                 </div>
+
+                {/* Show live agent progress inline during streaming - below message content */}
+                {isStreaming && willProgressPanelRender && streamingEvents && (
+                    <UnifiedProgressPanel
+                        events={streamingEvents}
+                        sources={streamingSources}
+                        isStreaming={isStreaming}
+                        agentType={agentType}
+                    />
+                )}
 
                 {/* Clickable image thumbnails — open in file browser */}
                 {imageAttachments.length > 0 && (
@@ -452,8 +459,12 @@ export const MessageBubble = memo(function MessageBubble({
                     </div>
                 )}
 
-                {/* Show task plans from skill_output events */}
-                {taskPlans.length > 0 && (
+                {/* Show task plan metadata (success criteria, challenges, questions) */}
+                {taskPlans.length > 0 && taskPlans.some(plan =>
+                    plan.success_criteria.length > 0 ||
+                    plan.potential_challenges.length > 0 ||
+                    plan.clarifying_questions.length > 0
+                ) && (
                     <div className="mt-4 space-y-4">
                         {taskPlans.map((plan, index) => (
                             <TaskPlanPanel
@@ -481,6 +492,7 @@ export const MessageBubble = memo(function MessageBubble({
                             <InlineAppPreview
                                 key={`app-preview-${index}`}
                                 previewUrl={preview.url}
+                                displayUrl={preview.displayUrl}
                                 template={preview.template}
                             />
                         ))}
@@ -489,7 +501,7 @@ export const MessageBubble = memo(function MessageBubble({
 
                 {/* Show saved agent events (progress steps) if available - only when not streaming */}
                 {!isStreaming && parsedMetadata?.agentEvents && parsedMetadata.agentEvents.length > 0 && (
-                    <TaskProgressPanel
+                    <UnifiedProgressPanel
                         events={parsedMetadata.agentEvents}
                         isStreaming={false}
                         agentType={agentType}

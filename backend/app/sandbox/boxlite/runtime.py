@@ -8,12 +8,13 @@ import asyncio
 import base64
 import shlex
 import uuid
+from pathlib import PurePosixPath as Path
 
 import boxlite
 
 from app.config import settings
 from app.core.logging import get_logger
-from app.sandbox.runtime import CommandResult
+from app.sandbox.runtime import CommandResult, OutputCallback
 
 logger = get_logger(__name__)
 
@@ -106,6 +107,8 @@ class BoxLiteRuntime:
         command: str,
         timeout: int = 60,
         cwd: str | None = None,
+        on_stdout: OutputCallback | None = None,
+        on_stderr: OutputCallback | None = None,
     ) -> CommandResult:
         """Run a command via BoxLite exec."""
         full_cmd = command
@@ -119,10 +122,21 @@ class BoxLiteRuntime:
                 timeout=timeout,
             )
 
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+
+            # Simulate line-by-line streaming after completion
+            if on_stdout and stdout:
+                for line in stdout.splitlines(keepends=True):
+                    on_stdout(line)
+            if on_stderr and stderr:
+                for line in stderr.splitlines(keepends=True):
+                    on_stderr(line)
+
             return CommandResult(
                 exit_code=result.exit_code,
-                stdout=result.stdout or "",
-                stderr=result.stderr or "",
+                stdout=stdout,
+                stderr=stderr,
             )
         except asyncio.TimeoutError:
             return CommandResult(
@@ -184,6 +198,11 @@ class BoxLiteRuntime:
         (the caller must do it anyway for E2B which does not auto-create
         parent directories).
         """
+        # Ensure parent directory exists (some images lack /home/user)
+        parent_dir = str(Path(path).parent)
+        if parent_dir != "/":
+            await self.run_command(f"mkdir -p {shlex.quote(parent_dir)}", timeout=10)
+
         if isinstance(content, bytes):
             # Binary write via base64 pipe using printf to avoid echo length limits
             encoded = base64.b64encode(content).decode("ascii")

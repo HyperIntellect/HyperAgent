@@ -5,7 +5,7 @@ Wraps E2B's AsyncSandbox to satisfy the SandboxRuntime protocol.
 
 from e2b import AsyncSandbox
 
-from app.sandbox.runtime import CommandResult, SandboxRuntime
+from app.sandbox.runtime import CommandResult, OutputCallback, SandboxRuntime
 
 
 class E2BRuntime:
@@ -32,11 +32,17 @@ class E2BRuntime:
         command: str,
         timeout: int = 60,
         cwd: str | None = None,
+        on_stdout: OutputCallback | None = None,
+        on_stderr: OutputCallback | None = None,
     ) -> CommandResult:
         """Run a command via E2B sandbox."""
         kwargs: dict = {"timeout": timeout}
         if cwd is not None:
             kwargs["cwd"] = cwd
+        if on_stdout is not None:
+            kwargs["on_stdout"] = on_stdout
+        if on_stderr is not None:
+            kwargs["on_stderr"] = on_stderr
         result = await self._sandbox.commands.run(command, **kwargs)
         return CommandResult(
             exit_code=result.exit_code,

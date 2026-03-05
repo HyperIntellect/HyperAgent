@@ -93,6 +93,7 @@ def extract_skill_events(
                         stream_url=preview_url,
                         sandbox_id=sandbox_id,
                         auth_key=None,
+                        display_url=output.get("display_url"),
                     )
                 )
                 logger.info(
@@ -161,6 +162,7 @@ def extract_app_builder_events(
                     stream_url=preview_url,
                     sandbox_id=sandbox_id,
                     auth_key=None,
+                    display_url=parsed.get("display_url"),
                 )
             )
             logger.info(
@@ -204,7 +206,22 @@ def extract_shell_and_code_events(
         if not isinstance(parsed, dict):
             return
 
-        # Extract terminal events
+        # If terminal events were already streamed in real-time, skip extraction
+        if parsed.get("terminal_streamed"):
+            # Only extract workspace events (not terminal — already dispatched)
+            workspace_events = parsed.get("workspace_events") or []
+            for ws_evt in workspace_events:
+                if isinstance(ws_evt, dict) and ws_evt.get("type") == "workspace_update":
+                    event_list.append(ws_evt)
+            if workspace_events:
+                logger.info(
+                    "shell_code_workspace_events_extracted",
+                    tool_name=tool_name,
+                    event_count=len(workspace_events),
+                )
+            return
+
+        # Extract terminal events (fallback path — not streamed)
         terminal_events = parsed.get("terminal_events") or []
         for evt in terminal_events:
             if isinstance(evt, dict) and evt.get("type") in (

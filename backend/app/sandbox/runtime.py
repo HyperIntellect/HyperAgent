@@ -6,7 +6,9 @@ must implement this protocol.
 """
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
+
+OutputCallback = Callable[[str], None]
 
 
 @dataclass
@@ -37,6 +39,8 @@ class SandboxRuntime(Protocol):
         command: str,
         timeout: int = 60,
         cwd: str | None = None,
+        on_stdout: OutputCallback | None = None,
+        on_stderr: OutputCallback | None = None,
     ) -> CommandResult:
         """Run a shell command in the sandbox.
 
@@ -44,6 +48,8 @@ class SandboxRuntime(Protocol):
             command: Shell command to execute
             timeout: Timeout in seconds
             cwd: Working directory for the command
+            on_stdout: Optional callback invoked per stdout line/chunk
+            on_stderr: Optional callback invoked per stderr line/chunk
 
         Returns:
             CommandResult with exit_code, stdout, stderr

@@ -1036,5 +1036,14 @@
             "moderate": "Moderate",
             "complex": "Complex"
         }
+    },
+    "progress": {
+        "processing": "Processing...",
+        "completed": "Completed",
+        "stepOf": "Step {current}/{total}",
+        "completedStepsOf": "{completed}/{total} steps completed",
+        "toolsUsed": "{count, plural, =1 {1 tool used} other {# tools used}}",
+        "remaining": "remaining",
+        "showMore": "+{count} more"
     }
 }

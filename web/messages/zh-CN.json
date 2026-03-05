@@ -1036,5 +1036,14 @@
             "moderate": "中等",
             "complex": "复杂"
         }
+    },
+    "progress": {
+        "processing": "处理中...",
+        "completed": "已完成",
+        "stepOf": "步骤 {current}/{total}",
+        "completedStepsOf": "已完成 {completed}/{total} 个步骤",
+        "toolsUsed": "{count, plural, =1 {使用了 1 个工具} other {使用了 # 个工具}}",
+        "remaining": "剩余",
+        "showMore": "还有 {count} 个"
     }
 }

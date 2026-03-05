@@ -320,7 +320,7 @@ class TestActNodePlanParsing:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ):
             result = await act_node(state)
 
@@ -337,21 +337,21 @@ class TestActNodePlanParsing:
         assert plan_events[0]["status"] == "running"
 
     @pytest.mark.asyncio
-    async def test_act_node_advances_step_when_in_planned_mode(self, sample_plan_steps):
-        """act_node should advance current_step_index after tool execution."""
+    async def test_act_node_advances_step_via_complete_step(self, sample_plan_steps):
+        """act_node should advance current_step_index when complete_step is called."""
         ai_msg = AIMessage(
-            content="Searching...",
+            content="Done searching.",
             tool_calls=[{
-                "name": "web_search",
-                "args": {"query": "Python scraping"},
-                "id": "call_search_001",
+                "name": "complete_step",
+                "args": {"step_number": 1, "result_summary": "Found BeautifulSoup"},
+                "id": "call_complete_001",
             }],
         )
 
-        search_result = ToolMessage(
-            content="Found results about BeautifulSoup",
-            tool_call_id="call_search_001",
-            name="web_search",
+        complete_result = ToolMessage(
+            content="Step 1 marked as completed. Summary: Found BeautifulSoup. The system will advance to the next step.",
+            tool_call_id="call_complete_001",
+            name="complete_step",
         )
 
         state: TaskState = {
@@ -372,12 +372,12 @@ class TestActNodePlanParsing:
         with patch(
             "app.agents.subagents.task.execute_tools_batch",
             new_callable=AsyncMock,
-            return_value=([search_result], [], 0, None),
+            return_value=([complete_result], [], 0, None),
         ), patch(
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ):
             result = await act_node(state)
 
@@ -393,21 +393,21 @@ class TestActNodePlanParsing:
         assert plan_events[1]["step_number"] == 2
 
     @pytest.mark.asyncio
-    async def test_act_node_completes_last_step(self, sample_plan_steps):
-        """act_node should handle completing the final step of a plan."""
+    async def test_act_node_completes_last_step_via_complete_step(self, sample_plan_steps):
+        """act_node should handle completing the final step of a plan via complete_step."""
         ai_msg = AIMessage(
-            content="Testing...",
+            content="Done testing.",
             tool_calls=[{
-                "name": "execute_code",
-                "args": {"code": "print('test')"},
-                "id": "call_exec_001",
+                "name": "complete_step",
+                "args": {"step_number": 3, "result_summary": "Tests pass"},
+                "id": "call_complete_003",
             }],
         )
 
-        exec_result = ToolMessage(
-            content="test",
-            tool_call_id="call_exec_001",
-            name="execute_code",
+        complete_result = ToolMessage(
+            content="Step 3 marked as completed.",
+            tool_call_id="call_complete_003",
+            name="complete_step",
         )
 
         state: TaskState = {
@@ -427,12 +427,12 @@ class TestActNodePlanParsing:
         with patch(
             "app.agents.subagents.task.execute_tools_batch",
             new_callable=AsyncMock,
-            return_value=([exec_result], [], 0, None),
+            return_value=([complete_result], [], 0, None),
         ), patch(
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ):
             result = await act_node(state)
 
@@ -486,7 +486,7 @@ class TestActNodePlanParsing:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ):
             result = await act_node(state)
 
@@ -529,7 +529,7 @@ class TestReasonNodeStepInjection:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ) as mock_config, patch(
             "app.agents.subagents.task.output_scanner"
         ) as mock_scanner:
@@ -581,7 +581,7 @@ class TestReasonNodeStepInjection:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ) as mock_config, patch(
             "app.agents.subagents.task.output_scanner"
         ) as mock_scanner:
@@ -627,7 +627,7 @@ class TestReasonNodeStepInjection:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ) as mock_config, patch(
             "app.agents.subagents.task.output_scanner"
         ) as mock_scanner:
@@ -672,7 +672,7 @@ class TestShouldContinueWithPlan:
             "tool_iterations": 0,
         }
 
-        with patch("app.agents.subagents.task._get_cached_react_config") as mock_config:
+        with patch("app.agents.subagents.task._get_react_config_for_state") as mock_config:
             mock_config.return_value = MagicMock(max_iterations=10)
             result = should_continue(state)
 
@@ -738,7 +738,7 @@ class TestStepGuidanceNotPersisted:
             "app.agents.subagents.task._get_cached_task_tools",
             return_value=[],
         ), patch(
-            "app.agents.subagents.task._get_cached_react_config",
+            "app.agents.subagents.task._get_react_config_for_state",
         ) as mock_config, patch(
             "app.agents.subagents.task.output_scanner"
         ) as mock_scanner:

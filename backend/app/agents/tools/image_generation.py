@@ -42,15 +42,15 @@ class GenerateImageInput(BaseModel):
     model: str | None = Field(
         default=None,
         description=(
-            "Model to use: 'gemini-3-pro-image-preview' (default), "
-            "'dall-e-3', 'dall-e-2'. OpenAI models require valid API key."
+            "Image generation model. Leave as None to use the server-configured default. "
+            "Only specify a model if the user explicitly requests a specific one."
         ),
     )
     quality: Literal["standard", "hd"] = Field(
         default="standard",
         description=(
-            "Quality setting for DALL-E 3. "
-            "'hd' produces more detailed images but takes longer."
+            "Image quality: 'standard' (default) or 'hd' for more detail "
+            "(provider support varies)."
         ),
     )
     # Context fields (injected by agent, not provided by LLM)
@@ -83,16 +83,15 @@ async def generate_image(
 
     Generated images are automatically saved to storage for persistent access.
 
-    Supports multiple providers:
-    - Gemini/Imagen (default): Good for general images
-    - DALL-E 3: Better for photorealistic images and text
+    Supports multiple providers (configured server-side).
+    Do NOT specify a model unless the user explicitly requests one.
 
     Args:
         prompt: Detailed description of the desired image
         size: Image dimensions (default 1024x1024)
         n: Number of images to generate (1-4)
-        model: Model to use (gemini-3-pro-image-preview, dall-e-3, dall-e-2)
-        quality: Quality setting for DALL-E 3 (standard or hd)
+        model: Leave as None to use the server default. Only set if user requests a specific model.
+        quality: Quality setting (standard or hd)
         user_id: User ID for storage (auto-injected by system)
 
     Returns:

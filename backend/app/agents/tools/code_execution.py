@@ -121,6 +121,12 @@ async def execute_code(
         _build_terminal_events,
         _detect_workspace_changes,
     )
+    from app.agents.tools.streaming_utils import (
+        emit_terminal_command,
+        emit_terminal_complete,
+        emit_terminal_error,
+        emit_terminal_output,
+    )
 
     try:
         # Get or create sandbox session
@@ -159,6 +165,9 @@ async def execute_code(
                         stderr=stderr[:500] if stderr else None,
                     )
 
+        # Emit terminal_command before execution
+        emit_terminal_command(display_cmd)
+
         # Execute the code
         pre_exec_time = time.time()
         exec_result = await executor.execute_code(
@@ -176,13 +185,18 @@ async def execute_code(
         exec_stderr = exec_result.get("stderr") or ""
         exit_code = exec_result.get("exit_code", 0)
 
-        # Build terminal events using shared helper
-        terminal_events = _build_terminal_events(
-            command=display_cmd,
-            stdout=exec_stdout,
-            stderr=exec_stderr if not exec_result["success"] else None,
-            exit_code=exit_code,
-        )
+        # Simulate line-by-line streaming for code execution output
+        if exec_stdout:
+            for line in exec_stdout.splitlines(keepends=True):
+                emit_terminal_output(content=line, stream="stdout")
+        if exec_stderr:
+            for line in exec_stderr.splitlines(keepends=True):
+                emit_terminal_output(content=line, stream="stderr")
+
+        # Emit terminal_complete (and error if non-zero)
+        if exit_code != 0 and exec_stderr:
+            emit_terminal_error(content=exec_stderr[:5000], exit_code=exit_code)
+        emit_terminal_complete(exit_code)
 
         # Detect workspace changes
         runtime = executor.get_runtime()
@@ -202,7 +216,7 @@ async def execute_code(
                 else exec_result.get("stderr", "")
             ),
             "sandbox_id": session.sandbox_id,
-            "terminal_events": terminal_events,
+            "terminal_streamed": True,
             "workspace_events": workspace_events,
         }
 
@@ -224,6 +238,7 @@ async def execute_code(
             error=str(e),
             traceback=traceback.format_exc(),
         )
+        # Fallback: build terminal events in JSON (not streamed)
         terminal_events = _build_terminal_events(
             command=display_cmd, stderr=str(e), exit_code=1,
         )

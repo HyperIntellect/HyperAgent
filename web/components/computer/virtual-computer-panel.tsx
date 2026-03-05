@@ -246,8 +246,10 @@ export function VirtualComputerPanel() {
         }
     }, [visibleTerminalLines, isLive, currentCommand, currentCwd, browserStream]);
 
-    // Activity description from agent progress
-    const activityDescription = activeProgress?.currentStageDescription ?? null;
+    // Activity stage name for i18n lookup (e.g., "plan", "execute")
+    const activityStage = activeProgress?.currentStage ?? null;
+    // Fallback description from backend (used when no translation exists)
+    const activityDescriptionFallback = activeProgress?.currentStageDescription ?? null;
 
     // Current running or last completed step from taskPlan
     const currentPlanStep = useMemo(() => {
@@ -312,7 +314,8 @@ export function VirtualComputerPanel() {
                     activeMode={activeMode}
                     onModeChange={setModeByUser}
                     onClose={handleClose}
-                    activityDescription={activityDescription}
+                    activityStage={activityStage}
+                    activityDescriptionFallback={activityDescriptionFallback}
                 />
 
                 {/* View area with error boundary */}

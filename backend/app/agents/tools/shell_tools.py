@@ -279,10 +279,27 @@ async def shell_exec(
             "terminal_events": terminal_events,
         })
 
-    # Synchronous execution
+    # Synchronous execution with real-time streaming
     try:
+        from app.agents.tools.streaming_utils import (
+            create_stderr_callback,
+            create_stdout_callback,
+            emit_terminal_command,
+            emit_terminal_complete,
+            emit_terminal_error,
+        )
+
+        # Emit terminal_command before execution
+        emit_terminal_command(command)
+
+        # Execute with streaming callbacks
         pre_exec_time = time.time()
-        result = await runtime.run_command(command, timeout=timeout)
+        result = await runtime.run_command(
+            command,
+            timeout=timeout,
+            on_stdout=create_stdout_callback(),
+            on_stderr=create_stderr_callback(),
+        )
         logger.info(
             "shell_exec_completed",
             exit_code=result.exit_code,
@@ -293,12 +310,10 @@ async def shell_exec(
         stderr = (result.stderr or "")[:5000]
         exit_code = result.exit_code
 
-        terminal_events = _build_terminal_events(
-            command=command,
-            stdout=stdout,
-            stderr=stderr if exit_code != 0 else None,
-            exit_code=exit_code,
-        )
+        # Emit terminal_complete (and error if non-zero)
+        if exit_code != 0 and stderr:
+            emit_terminal_error(content=stderr, exit_code=exit_code)
+        emit_terminal_complete(exit_code)
 
         # Detect workspace changes for non-read-only commands
         workspace_events = []
@@ -312,11 +327,12 @@ async def shell_exec(
             "exit_code": exit_code,
             "stdout": stdout,
             "stderr": stderr,
-            "terminal_events": terminal_events,
+            "terminal_streamed": True,
             "workspace_events": workspace_events,
         })
     except Exception as e:
         logger.error("shell_exec_failed", error=str(e))
+        # Fallback: build terminal events in JSON (not streamed)
         terminal_events = _build_terminal_events(
             command=command, stderr=str(e), exit_code=1,
         )

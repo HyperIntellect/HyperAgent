@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useRef } from "react";
+import React, { useCallback, useRef, useMemo } from "react";
 import { TerminalSquare, Monitor, Folder, X, ExternalLink } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,10 @@ interface ComputerPanelHeaderProps {
     activeMode: ComputerMode;
     onModeChange: (mode: ComputerMode) => void;
     onClose: () => void;
-    activityDescription?: string | null;
+    /** Stage name for i18n lookup (e.g. "plan", "execute", "search") */
+    activityStage?: string | null;
+    /** Backend description used as fallback when no translation found */
+    activityDescriptionFallback?: string | null;
 }
 
 const modeConfig: { mode: ComputerMode; icon: React.ElementType; labelKey: string }[] = [
@@ -23,9 +26,11 @@ export function ComputerPanelHeader({
     activeMode,
     onModeChange,
     onClose,
-    activityDescription,
+    activityStage,
+    activityDescriptionFallback,
 }: ComputerPanelHeaderProps) {
     const t = useTranslations("computer");
+    const tStages = useTranslations("chat.agent.stages");
     const tabListRef = useRef<HTMLDivElement>(null);
 
     const handleTabKeyDown = useCallback(
@@ -60,6 +65,23 @@ export function ComputerPanelHeader({
     const handleOpenNewTab = useCallback(() => {
         // Placeholder for open-in-new-tab / fullscreen action
     }, []);
+
+    // Resolve the activity label via i18n, falling back to the backend description
+    const activityLabel = useMemo(() => {
+        if (!activityStage && !activityDescriptionFallback) return null;
+        if (activityStage) {
+            // Try translating the stage name via chat.agent.stages.{name}.running
+            const key = `${activityStage}.running` as Parameters<typeof tStages>[0];
+            if (typeof tStages.has === "function" && tStages.has(key)) {
+                try {
+                    return tStages(key);
+                } catch {
+                    // fall through
+                }
+            }
+        }
+        return activityDescriptionFallback ?? null;
+    }, [activityStage, activityDescriptionFallback, tStages]);
 
     return (
         <div className="shrink-0">
@@ -133,11 +155,11 @@ export function ComputerPanelHeader({
                 <span
                     className={cn(
                         "w-1.5 h-1.5 rounded-full shrink-0",
-                        activityDescription ? "bg-info animate-pulse" : "bg-muted-foreground/40"
+                        activityLabel ? "bg-info animate-pulse" : "bg-muted-foreground/40"
                     )}
                 />
                 <span className="text-xs text-muted-foreground truncate font-mono">
-                    {activityDescription ?? t("activityIdle")}
+                    {activityLabel ?? t("activityIdle")}
                 </span>
             </div>
         </div>

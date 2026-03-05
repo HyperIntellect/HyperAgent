@@ -121,6 +121,10 @@ class TaskState(SupervisorState, total=False):
     execution_plan: list[dict]  # Parsed plan steps [{step_number, action, tool_or_skill, ...}]
     current_step_index: int  # 0-indexed pointer into execution_plan
 
+    # Query complexity classification (auto-planning)
+    # Set by classify_node: "simple", "moderate", or "complex"
+    query_complexity: str | None
+
     # Self-correction / verification loop
     # consecutive_errors uses an override reducer (lambda a, b: b) so it is
     # always replaced by the latest value rather than accumulated.
@@ -141,6 +145,9 @@ class TaskState(SupervisorState, total=False):
     # Each hash = md5(tool_name + sorted(args)). Max 5 recent entries.
     # Uses override reducer so the node always sets the full list.
     last_tool_calls_hash: Annotated[list[str], _override_reducer]
+
+    # Step timing for duration tracking
+    step_start_time: int | None  # Timestamp (ms) when the current step started
 
     # Whether attached files have been uploaded to the sandbox (one-time flag)
     files_uploaded_to_sandbox: bool

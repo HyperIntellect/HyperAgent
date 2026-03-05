@@ -20,6 +20,7 @@ from app.agents.policy.contracts import (
 )
 from app.agents.tools.app_builder import get_app_builder_tools
 from app.agents.tools.codeact import execute_script
+from app.agents.tools.complete_step import complete_step_tool
 from app.agents.tools.browser_use import (
     browser_click,
     browser_console_exec,
@@ -114,6 +115,7 @@ class ToolCategory(str, Enum):
     TOOL_SEARCH = "tool_search"  # Meta-tool for discovering tools
     MCP = "mcp"  # MCP (Model Context Protocol) tools from external servers
     CODEACT = "codeact"  # CodeAct hybrid execution (multi-line Python with helpers)
+    PLAN_TRACKING = "plan_tracking"  # Plan step completion tracking
 
 
 # Tool instances by category
@@ -172,6 +174,8 @@ TOOL_CATALOG: dict[ToolCategory, list[BaseTool]] = {
     ToolCategory.MCP: [],
     # CodeAct - multi-line Python execution with helper library
     ToolCategory.CODEACT: [execute_script],
+    # Plan step tracking
+    ToolCategory.PLAN_TRACKING: [complete_step_tool],
 }
 
 
@@ -281,6 +285,9 @@ TOOL_CONTRACTS: dict[str, CapabilityContract] = {
     "execute_script": CapabilityContract(
         SideEffectLevel.HIGH, DataSensitivity.SENSITIVE, NetworkScope.SANDBOX_ONLY, False
     ),
+    "complete_step": CapabilityContract(
+        SideEffectLevel.NONE, DataSensitivity.INTERNAL, NetworkScope.NONE, True
+    ),
 }
 
 # Browser tools are all high-impact.
@@ -326,6 +333,7 @@ AGENT_TOOL_MAPPING: dict[str, list[ToolCategory]] = {
         ToolCategory.NOTIFICATION,  # For sending notifications/webhooks
         ToolCategory.TOOL_SEARCH,  # For discovering tools on-demand
         ToolCategory.MCP,  # MCP tools from external servers
+        ToolCategory.PLAN_TRACKING,  # Plan step completion tracking
     ],
     AgentType.RESEARCH.value: [
         ToolCategory.SEARCH,

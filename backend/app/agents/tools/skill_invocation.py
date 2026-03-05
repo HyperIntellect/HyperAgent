@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from langchain_core.callbacks import dispatch_custom_event
+from langchain_core.callbacks import adispatch_custom_event
 from langchain_core.tools import tool
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,7 +21,9 @@ def _remove_internal_fields(schema: dict[str, Any]) -> dict[str, Any]:
     props.pop("task_id", None)
     props.pop("user_intent_source", None)
     required = schema.get("required", [])
-    schema["required"] = [r for r in required if r not in ("user_id", "task_id", "user_intent_source")]
+    schema["required"] = [
+        r for r in required if r not in ("user_id", "task_id", "user_intent_source")
+    ]
     return schema
 
 
@@ -160,11 +162,14 @@ async def invoke_skill(
                 # Dispatch in real-time via LangChain callback system
                 # so the stream processor can yield them immediately
                 try:
-                    dispatch_custom_event(
-                        "skill_event", data=event
+                    await adispatch_custom_event("skill_event", data=event)
+                except Exception as e:
+                    logger.warning(
+                        "skill_event_dispatch_failed",
+                        skill_id=skill_id,
+                        event_type=event_type,
+                        error=str(e),
                     )
-                except Exception:
-                    pass  # Don't block on dispatch failure
 
         if error:
             logger.error("skill_execution_error", skill_id=skill_id, error=error)

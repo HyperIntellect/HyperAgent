@@ -1,7 +1,7 @@
 """Centralized prompt management for agents."""
 
 from langchain_core.messages import SystemMessage
-
+from pydantic import BaseModel, Field
 
 # ============================================================================
 # Locale / Language Support
@@ -107,6 +107,34 @@ For effective browser usage:
 - browser_wait_for_element: Wait for an element to appear in the DOM (useful for dynamic content)
 </browser_best_practices>
 """
+
+
+# ============================================================================
+# Query Complexity Classification
+# ============================================================================
+
+
+class ComplexityResult(BaseModel):
+    """Structured output for query complexity classification."""
+
+    complexity: str = Field(
+        description="Query complexity level: 'simple', 'moderate', or 'complex'",
+    )
+    reasoning: str = Field(
+        description="Brief explanation for the classification",
+    )
+
+
+COMPLEXITY_CLASSIFICATION_PROMPT = """Classify the complexity of this user query.
+
+Query: {query}
+
+Classification rules:
+- "simple": Greetings, factual questions, single-tool tasks (e.g., "Hello", "What is X?", "Generate an image of a cat")
+- "moderate": Tasks requiring 2-3 tool calls or a single skill invocation (e.g., "Search for X and summarize", "Write a Python script to do Y")
+- "complex": Multi-step tasks requiring planning, multiple skills, or iterative work (e.g., "Build a portfolio website with contact form", "Research X, analyze the data, and create a report with visualizations", "Create a full-stack app with authentication")
+
+Respond with the complexity level and a brief reasoning."""
 
 
 # ============================================================================
@@ -968,18 +996,17 @@ You help users create images by:
 1. Understanding their visual intent and requirements
 2. Selecting appropriate style, composition, and technical parameters
 3. Crafting detailed prompts optimized for image generation models
-4. Choosing between different image generation providers (Gemini/Imagen or OpenAI DALL-E)
+4. Adjusting quality and style settings for optimal results
 </capabilities>
 
 <model_selection>
 When selecting a model:
-- Gemini/Imagen: Default choice, good for general images, supports various aspect ratios
-- OpenAI DALL-E 3: Better for photorealistic images, complex scenes, and text in images
-- DALL-E 3 supports "hd" quality for more detailed images
+- By default, do NOT specify a model — the server will use the configured default provider.
+- Only specify a model if the user explicitly requests a specific provider.
 
-Model hints in user requests:
-- "dall-e", "dalle", "openai" → Use DALL-E
-- "gemini", "imagen", "google" → Use Gemini
+Model hints in user requests (only use when user explicitly mentions these):
+- "dall-e", "dalle", "openai" → Set model to use DALL-E
+- "gemini", "imagen", "google" → Set model to use Gemini
 </model_selection>
 
 <styles>

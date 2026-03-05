@@ -11,8 +11,9 @@ from app.agents.tools.browser_use import (
     browser_scroll,
     browser_type,
 )
-from app.agents.tools.codeact import execute_script
 from app.agents.tools.code_execution import execute_code, execute_code_with_context
+from app.agents.tools.codeact import execute_script
+from app.agents.tools.complete_step import complete_step_tool
 from app.agents.tools.database import execute_sql
 from app.agents.tools.deployment import deploy_to_production
 from app.agents.tools.file_tools import (
@@ -225,6 +226,8 @@ __all__ = [
     "estimate_message_tokens",
     "truncate_messages_to_budget",
     "truncate_tool_result",
+    # Plan step tracking
+    "complete_step_tool",
     # Tool pipeline (shared execution infrastructure)
     "ToolExecutionContext",
     "ToolExecutionResult",

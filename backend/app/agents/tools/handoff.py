@@ -87,6 +87,10 @@ class HandoffInput(BaseModel):
 MAX_HANDOFFS = 3
 
 # Define which agents can delegate to which other agents
+# SCAFFOLDING: The handoff system is currently inactive — all agent types route
+# to the TASK agent, and the matrix below has no valid targets. The code is
+# preserved as scaffolding for future multi-agent expansion. When adding new
+# agents, populate HANDOFF_MATRIX with valid source→target pairs.
 HANDOFF_MATRIX: dict[str, list[str]] = {
     AGENT_TASK: [],  # Research is now a skill, no standalone agents to hand off to
     AGENT_RESEARCH: [],  # Kept for backward compatibility
@@ -104,12 +108,12 @@ SHARED_MEMORY_TOTAL_BUDGET = 8000
 
 # Priority weights for different memory types (higher = more budget allocation)
 SHARED_MEMORY_PRIORITIES = {
-    "research_findings": 3,      # High priority - core research output
-    "research_sources": 2,       # Medium priority - supporting evidence
-    "generated_code": 3,         # High priority - code artifacts
-    "code_language": 1,          # Low priority - just metadata
-    "execution_results": 2,      # Medium priority - results
-    "additional_context": 2,     # Medium priority
+    "research_findings": 3,  # High priority - core research output
+    "research_sources": 2,  # Medium priority - supporting evidence
+    "generated_code": 3,  # High priority - code artifacts
+    "code_language": 1,  # Low priority - just metadata
+    "execution_results": 2,  # Medium priority - results
+    "additional_context": 2,  # Medium priority
 }
 
 # Minimum allocation per field (prevents complete truncation)
@@ -119,6 +123,9 @@ SHARED_MEMORY_MIN_CHARS = 200
 # =============================================================================
 # Tool Creation
 # =============================================================================
+
+# SCAFFOLDING: These tool creation functions are inactive while HANDOFF_MATRIX
+# is empty. They will produce handoff tools once targets are configured.
 
 
 def create_handoff_tool(
@@ -232,6 +239,9 @@ def parse_handoff_response(tool_result: dict) -> tuple[str, str, str]:
 # Shared Memory Management
 # =============================================================================
 
+# SCAFFOLDING: Shared memory management is designed for cross-agent context
+# transfer during handoffs. Currently unused while handoffs are disabled.
+
 
 def _smart_truncate(text: str, max_chars: int) -> str:
     """Truncate text intelligently at sentence/paragraph boundaries.
@@ -264,7 +274,7 @@ def _smart_truncate(text: str, max_chars: int) -> str:
     for end_marker in [". ", "! ", "? ", ".\n"]:
         last_sentence = truncated.rfind(end_marker)
         if last_sentence > max_chars * 0.5:  # At least 50% of content
-            return truncated[:last_sentence + 1] + " [...truncated]"
+            return truncated[: last_sentence + 1] + " [...truncated]"
 
     # Fall back to word boundary
     last_space = truncated.rfind(" ")
@@ -310,10 +320,7 @@ def truncate_shared_memory(
         return dict(memory)
 
     # Calculate budget allocation based on priorities
-    total_priority = sum(
-        SHARED_MEMORY_PRIORITIES.get(key, 1)
-        for key in field_sizes.keys()
-    )
+    total_priority = sum(SHARED_MEMORY_PRIORITIES.get(key, 1) for key in field_sizes.keys())
 
     allocations: dict[str, int] = {}
     for key in field_sizes.keys():
@@ -426,12 +433,14 @@ def update_handoff_history(
         New history list with added entry
     """
     new_history = list(history)
-    new_history.append({
-        "source_agent": source_agent,
-        "target_agent": handoff.get("target_agent", ""),
-        "task_description": handoff.get("task_description", ""),
-        "context": handoff.get("context", ""),
-    })
+    new_history.append(
+        {
+            "source_agent": source_agent,
+            "target_agent": handoff.get("target_agent", ""),
+            "task_description": handoff.get("task_description", ""),
+            "context": handoff.get("context", ""),
+        }
+    )
     return new_history
 
 
@@ -480,10 +489,12 @@ def build_query_with_context(
         if truncated_memory.get("research_sources"):
             sources = truncated_memory["research_sources"]
             if isinstance(sources, list) and sources:
-                sources_text = "\n".join([
-                    f"- [{s.get('title', 'Source')}]({s.get('url', '')}): {s.get('snippet', '')[:200]}"
-                    for s in sources[:5]  # Limit to top 5 sources for context budget
-                ])
+                sources_text = "\n".join(
+                    [
+                        f"- [{s.get('title', 'Source')}]({s.get('url', '')}): {s.get('snippet', '')[:200]}"
+                        for s in sources[:5]  # Limit to top 5 sources for context budget
+                    ]
+                )
                 context_parts.append(f"Research sources:\n{sources_text}")
         if truncated_memory.get("generated_code"):
             code_lang = truncated_memory.get("code_language", "python")
@@ -491,9 +502,7 @@ def build_query_with_context(
                 f"Code from previous agent:\n```{code_lang}\n{truncated_memory['generated_code']}\n```"
             )
         if truncated_memory.get("execution_results"):
-            context_parts.append(
-                f"Execution results:\n{truncated_memory['execution_results']}"
-            )
+            context_parts.append(f"Execution results:\n{truncated_memory['execution_results']}")
         if truncated_memory.get("additional_context"):
             context_parts.append(truncated_memory["additional_context"])
 
@@ -501,4 +510,3 @@ def build_query_with_context(
             result = f"{result}\n\n---\nShared Context:\n" + "\n\n".join(context_parts)
 
     return result
-

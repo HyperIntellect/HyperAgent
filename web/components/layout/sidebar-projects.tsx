@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { FolderOpen, Plus, ChevronDown } from "lucide-react";
+import { Plus, ChevronDown } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/lib/stores/project-store";
@@ -66,17 +66,25 @@ export function SidebarProjects({ variant: _variant, onNavigate }: SidebarProjec
                     <span className="text-xs font-medium text-muted-foreground">
                         {t("projects")}
                     </span>
-                    <button
-                        onClick={() => setCollapsed(!collapsed)}
-                        className="flex items-center text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                        <ChevronDown
-                            className={cn(
-                                "w-3.5 h-3.5 transition-transform duration-200",
-                                collapsed && "-rotate-90"
-                            )}
-                        />
-                    </button>
+                    <div className="flex items-center gap-0.5">
+                        <button
+                            onClick={() => setCreateDialogOpen(true)}
+                            className="w-5 h-5 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                        >
+                            <Plus className="w-4 h-4" strokeWidth={2} />
+                        </button>
+                        <button
+                            onClick={() => setCollapsed(!collapsed)}
+                            className="w-5 h-5 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                            <ChevronDown
+                                className={cn(
+                                    "w-3.5 h-3.5 transition-transform duration-200",
+                                    collapsed && "-rotate-90"
+                                )}
+                            />
+                        </button>
+                    </div>
                 </div>
 
                 {/* Project list */}
@@ -135,18 +143,6 @@ export function SidebarProjects({ variant: _variant, onNavigate }: SidebarProjec
                                 );
                             })}
 
-                            {/* New Project row */}
-                            <div
-                                className="group relative flex items-center gap-3 px-2.5 py-2.5 rounded-lg cursor-pointer transition-colors hover:bg-accent"
-                                onClick={() => setCreateDialogOpen(true)}
-                            >
-                                <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center bg-muted group-hover:bg-secondary transition-colors border border-dashed border-muted-foreground/20">
-                                    <Plus className="w-3.5 h-3.5 text-muted-foreground" />
-                                </div>
-                                <span className="text-sm text-muted-foreground group-hover:text-foreground transition-colors">
-                                    {t("newProject")}
-                                </span>
-                            </div>
                         </div>
                     </div>
                 )}

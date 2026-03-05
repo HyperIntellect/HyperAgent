@@ -509,17 +509,19 @@ async def app_start_server(
         start_cmd = custom_command or APP_TEMPLATES.get(template, APP_TEMPLATES["react"])["start_cmd"]
 
         if result["success"]:
+            display_url = result.get("display_url", f"http://localhost:{result['port']}")
             terminal_events = _create_terminal_events(
                 command=start_cmd,
-                output=f"Server started at {result['preview_url']}",
+                output=f"Server started at {display_url}",
                 exit_code=0,
                 cwd="/home/user/app",
             )
             return {
                 "success": True,
                 "preview_url": result["preview_url"],
+                "display_url": display_url,
                 "port": result["port"],
-                "message": f"App is running! View it at: {result['preview_url']}",
+                "message": f"App is running! View it at: {display_url}",
                 "terminal_events": terminal_events,
             }
 

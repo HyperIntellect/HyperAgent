@@ -462,6 +462,35 @@ function computeStageStatus(
     return "pending";
 }
 
+/**
+ * Auto-complete stages that are still "running" but have later stages
+ * already started — the backend may not always send explicit completion events.
+ */
+function autoCompleteStaleStages(groups: StageGroup[]): StageGroup[] {
+    if (groups.length <= 1) return groups;
+
+    const result = [...groups];
+    for (let i = 0; i < result.length - 1; i++) {
+        const current = result[i];
+        if (current.stage.status !== "running") continue;
+
+        // Check if any later stage has started
+        const hasLaterActivity = result.slice(i + 1).some(
+            (g) => g.startTime !== undefined || g.stage.status === "running" || g.stage.status === "completed"
+        );
+
+        if (hasLaterActivity) {
+            const nextStart = result[i + 1]?.startTime;
+            result[i] = {
+                ...current,
+                stage: { ...current.stage, status: "completed" },
+                endTime: current.endTime ?? nextStart,
+            };
+        }
+    }
+    return result;
+}
+
 // --- New timeline components ---
 
 // Tiny dot indicator for stage status
@@ -701,7 +730,9 @@ export function TaskProgressPanel({
 
     const processingLabel = tProgress("processing");
     const stageGroups = useMemo(() => {
-        return groupEventsByStage(events, processingLabel, isHistorical);
+        const groups = groupEventsByStage(events, processingLabel, isHistorical);
+        // Auto-complete stale running stages when later stages have started
+        return isHistorical ? groups : autoCompleteStaleStages(groups);
     }, [events, processingLabel, isHistorical]);
 
     const progressSummary = useMemo(() => {

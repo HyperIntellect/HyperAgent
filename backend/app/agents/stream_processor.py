@@ -400,7 +400,11 @@ class StreamProcessor:
         # Reasoning content extraction (from thinking-mode providers like DeepSeek, Kimi, Qwen)
         if chunk and hasattr(chunk, "additional_kwargs"):
             reasoning_content = chunk.additional_kwargs.get("reasoning_content")
-            if reasoning_content and isinstance(reasoning_content, str) and reasoning_content.strip():
+            if (
+                reasoning_content
+                and isinstance(reasoning_content, str)
+                and reasoning_content.strip()
+            ):
                 yield agent_events.reasoning(
                     thinking=reasoning_content,
                     context="llm_thinking",
@@ -489,7 +493,8 @@ class StreamProcessor:
             # Count how many on_tool_start we've already processed for this tool
             # (tracked by having run_id in pending_tool_calls)
             already_started = sum(
-                1 for pid in pending_ids_for_tool
+                1
+                for pid in pending_ids_for_tool
                 if self.pending_tool_calls.get(pid, {}).get("run_id")
             )
             unmatched_pending = len(pending_ids_for_tool) - already_started
@@ -615,8 +620,16 @@ class StreamProcessor:
                     if parsed.get("success") and parsed.get("output"):
                         skill_id = parsed.get("skill_id", "")
                         output_dict = parsed.get("output", {})
-                        preview_url = output_dict.get("preview_url") if isinstance(output_dict, dict) else None
-                        download_url = output_dict.get("download_url") if isinstance(output_dict, dict) else None
+                        preview_url = (
+                            output_dict.get("preview_url")
+                            if isinstance(output_dict, dict)
+                            else None
+                        )
+                        download_url = (
+                            output_dict.get("download_url")
+                            if isinstance(output_dict, dict)
+                            else None
+                        )
                         dedup_value = download_url or preview_url or ""
                         skill_key = f"{skill_id}:{dedup_value}"
                         if skill_key not in self.emitted_skill_output_keys:
@@ -633,8 +646,39 @@ class StreamProcessor:
                                 preview_url=preview_url,
                             )
                             yield skill_output_event
-            except (json.JSONDecodeError, ValueError):
-                pass
+
+                            # Fallback: emit browser_stream if skill output has preview_url
+                            # (in case real-time dispatch was missed)
+                            if isinstance(output_dict, dict) and output_dict.get("preview_url"):
+                                fallback_sandbox_id = output_dict.get("sandbox_id", "")
+                                if not fallback_sandbox_id:
+                                    # Extract from preview_url pattern: /api/v1/sandbox/app/{id}/
+                                    url = output_dict["preview_url"]
+                                    parts = url.rstrip("/").split("/")
+                                    idx = next(
+                                        (i for i, p in enumerate(parts) if p == "app"),
+                                        -1,
+                                    )
+                                    fallback_sandbox_id = (
+                                        parts[idx + 1]
+                                        if idx >= 0 and idx + 1 < len(parts)
+                                        else f"app-{skill_id}"
+                                    )
+                                fallback_event = agent_events.browser_stream(
+                                    stream_url=output_dict["preview_url"],
+                                    sandbox_id=fallback_sandbox_id,
+                                    auth_key=None,
+                                    display_url=output_dict.get("display_url"),
+                                )
+                                if self._should_emit_subevent(fallback_event, "invoke_skill"):
+                                    yield fallback_event
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.warning(
+                    "tool_output_json_parse_failed",
+                    tool_name=tool_name,
+                    error=str(exc),
+                    output_preview=output[:200] if output else "",
+                )
 
         # Extract slide generation output and emit as skill_output event
         if tool_name == "generate_slides" and output:
@@ -660,17 +704,20 @@ class StreamProcessor:
                         },
                     }
                     # Track for deduplication against chain_end forwarded events
-                    self.emitted_skill_output_keys.add(
-                        f"slide_generation:{parsed['download_url']}"
-                    )
+                    self.emitted_skill_output_keys.add(f"slide_generation:{parsed['download_url']}")
                     yield slide_event
                     logger.info(
                         "emitting_slide_output",
                         title=parsed.get("title", ""),
                         download_url=parsed["download_url"][:80],
                     )
-            except (json.JSONDecodeError, ValueError):
-                pass
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.warning(
+                    "tool_output_json_parse_failed",
+                    tool_name=tool_name,
+                    error=str(exc),
+                    output_preview=output[:200] if output else "",
+                )
 
         # Extract terminal/workspace events from shell_exec and execute_code
         if tool_name in ("shell_exec", "execute_code") and output:
@@ -679,29 +726,33 @@ class StreamProcessor:
 
                 parsed = json.loads(output)
                 if isinstance(parsed, dict):
-                    terminal_events = parsed.get("terminal_events", [])
-                    if terminal_events:
-                        evt_types = [
-                            e.get("type")
-                            for e in terminal_events
-                            if isinstance(e, dict)
-                        ]
-                        logger.info(
-                            "shell_code_tool_events_extracted",
-                            tool_name=tool_name,
-                            event_count=len(terminal_events),
-                            event_types=evt_types,
-                        )
-                    for evt in terminal_events:
-                        if isinstance(evt, dict) and self._should_emit_subevent(evt, tool_name):
-                            yield evt
+                    # If terminal events were already streamed in real-time,
+                    # skip terminal extraction — only extract workspace events.
+                    if not parsed.get("terminal_streamed"):
+                        terminal_events = parsed.get("terminal_events", [])
+                        if terminal_events:
+                            evt_types = [e.get("type") for e in terminal_events if isinstance(e, dict)]
+                            logger.info(
+                                "shell_code_tool_events_extracted",
+                                tool_name=tool_name,
+                                event_count=len(terminal_events),
+                                event_types=evt_types,
+                            )
+                        for evt in terminal_events:
+                            if isinstance(evt, dict) and self._should_emit_subevent(evt, tool_name):
+                                yield evt
 
                     workspace_events = parsed.get("workspace_events", [])
                     for evt in workspace_events:
                         if isinstance(evt, dict) and self._should_emit_subevent(evt, tool_name):
                             yield evt
-            except (json.JSONDecodeError, ValueError):
-                pass
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.warning(
+                    "tool_output_json_parse_failed",
+                    tool_name=tool_name,
+                    error=str(exc),
+                    output_preview=output[:200] if output else "",
+                )
 
         # Extract terminal events from app builder tools
         app_builder_tools = {
@@ -722,7 +773,9 @@ class StreamProcessor:
                             "app_builder_tool_events_extracted",
                             tool_name=tool_name,
                             event_count=len(terminal_events),
-                            event_types=[e.get("type") for e in terminal_events if isinstance(e, dict)],
+                            event_types=[
+                                e.get("type") for e in terminal_events if isinstance(e, dict)
+                            ],
                         )
                     for evt in terminal_events:
                         if isinstance(evt, dict) and self._should_emit_subevent(evt, tool_name):
@@ -732,19 +785,39 @@ class StreamProcessor:
                     if tool_name == "app_start_server" and parsed.get("success"):
                         preview_url = parsed.get("preview_url")
                         if preview_url:
-                            sandbox_id = parsed.get("sandbox_id", "app-sandbox")
+                            sandbox_id = parsed.get("sandbox_id", "")
+                            if not sandbox_id:
+                                # Extract sandbox_id from preview_url
+                                # pattern: /api/v1/sandbox/app/{id}/
+                                parts = preview_url.rstrip("/").split("/")
+                                idx = next(
+                                    (i for i, p in enumerate(parts) if p == "app"),
+                                    -1,
+                                )
+                                sandbox_id = (
+                                    parts[idx + 1]
+                                    if idx >= 0 and idx + 1 < len(parts)
+                                    else "app-sandbox"
+                                )
                             yield agent_events.browser_stream(
                                 stream_url=preview_url,
                                 sandbox_id=sandbox_id,
                                 auth_key=None,
+                                display_url=parsed.get("display_url"),
                             )
                             logger.info(
                                 "app_builder_browser_stream_emitted",
                                 preview_url=preview_url,
                                 sandbox_id=sandbox_id,
+                                display_url=parsed.get("display_url"),
                             )
-            except (json.JSONDecodeError, ValueError):
-                pass
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.warning(
+                    "tool_output_json_parse_failed",
+                    tool_name=tool_name,
+                    error=str(exc),
+                    output_preview=output[:200] if output else "",
+                )
 
         # Resolve tool call ID
         tool_call_id = self._resolve_tool_call_id(run_id, tool_name)
@@ -785,11 +858,26 @@ class StreamProcessor:
             if tool_queue:
                 tool_call_id = tool_queue.pop(0)
 
-        return tool_call_id or str(run_id) if run_id else str(uuid.uuid4())
+        if tool_call_id:
+            return tool_call_id
+        if run_id:
+            logger.warning(
+                "tool_call_id_resolution_fallback",
+                run_id=run_id,
+                tool_name=tool_name,
+                reason="no_matching_pending_call",
+            )
+            return str(run_id)
+        fallback_id = str(uuid.uuid4())
+        logger.warning(
+            "tool_call_id_resolution_fallback",
+            tool_name=tool_name,
+            reason="no_run_id_or_pending_call",
+            fallback_id=fallback_id,
+        )
+        return fallback_id
 
-    async def _handle_custom_event(
-        self, event: dict
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    async def _handle_custom_event(self, event: dict) -> AsyncGenerator[dict[str, Any], None]:
         """Handle custom events dispatched via dispatch_custom_event from within tools.
 
         This enables real-time streaming of skill events (terminal, stage,
@@ -815,6 +903,7 @@ class StreamProcessor:
             "workspace_update",
             "plan_overview",
             "plan_step_completed",
+            "step_activity",
             "image",
         ):
             return

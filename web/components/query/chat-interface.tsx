@@ -7,18 +7,9 @@ import { useTranslations, useLocale } from "next-intl";
 import {
     Send,
     Square,
-    GraduationCap,
-    TrendingUp,
-    Code2,
-    Newspaper,
-    BarChart3,
-    Search,
     Check,
     Zap,
     Layers,
-    AppWindow,
-    ImageIcon,
-    Presentation,
     ChevronDown,
     Sparkles,
 } from "lucide-react";
@@ -26,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { useSettingsStore } from "@/lib/stores/settings-store";
 import { useAgentProgressStore } from "@/lib/stores/agent-progress-store";
+import { useExecutionProgressStore } from "@/lib/stores/execution-progress-store";
 import { useComputerStore } from "@/lib/stores/computer-store";
 
 import { MessageBubble } from "@/components/chat/message-bubble";
@@ -68,31 +60,7 @@ import { reduceStreamEvent } from "@/lib/utils/stream-reducer";
 import type { ExternalFileEntry } from "@/lib/stores/computer-store";
 import { getTranslatedSkillName } from "@/lib/utils/skill-i18n";
 
-// Larger icons for better visual presence
-const AGENT_KEYS = ["research", "data", "app", "image", "slide"] as const;
-type VisibleAgent = (typeof AGENT_KEYS)[number];
-const AGENT_ICONS: Record<VisibleAgent, React.ReactNode> = {
-    research: <Search className="w-5 h-5" />,
-    data: <BarChart3 className="w-5 h-5" />,
-    app: <AppWindow className="w-5 h-5" />,
-    image: <ImageIcon className="w-5 h-5" />,
-    slide: <Presentation className="w-5 h-5" />,
-};
-
-const SCENARIO_ICONS: Record<ResearchScenario, React.ReactNode> = {
-    academic: <GraduationCap className="w-5 h-5" />,
-    market: <TrendingUp className="w-5 h-5" />,
-    technical: <Code2 className="w-5 h-5" />,
-    news: <Newspaper className="w-5 h-5" />,
-};
-
 const SCENARIO_KEYS: ResearchScenario[] = ["academic", "market", "technical", "news"];
-const DEPTH_KEYS: ResearchDepth[] = ["fast", "deep"];
-
-const DEPTH_ICONS: Record<ResearchDepth, React.ReactNode> = {
-    fast: <Zap className="w-4 h-4" />,
-    deep: <Layers className="w-4 h-4" />,
-};
 
 // Memoized message list to prevent re-renders on input changes
 interface MessageListProps {
@@ -202,9 +170,6 @@ export function ChatInterface() {
     const [selectedAgent, setSelectedAgent] = useState<AgentType | null>(null);
     const [selectedScenario, setSelectedScenario] = useState<ResearchScenario | null>(null);
     const [selectedDepth, setSelectedDepth] = useState<ResearchDepth>("fast");
-    const [showResearchSubmenu, setShowResearchSubmenu] = useState(false);
-    const [submenuPosition, setSubmenuPosition] = useState<{ x: 'left' | 'right'; y: 'top' | 'bottom' }>({ x: 'right', y: 'bottom' });
-    const submenuRef = useRef<HTMLDivElement>(null);
     const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
     const [showModelMenu, setShowModelMenu] = useState(false);
     const modelMenuRef = useRef<HTMLDivElement>(null);
@@ -215,7 +180,6 @@ export function ChatInterface() {
     const [activeInterrupt, setActiveInterrupt] = useState<InterruptEvent | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
-    const researchRef = useRef<HTMLDivElement>(null);
     const streamingContentRef = useRef("");
     const updateScheduledRef = useRef(false);
     const streamingStartTimeRef = useRef<Date>(new Date());
@@ -310,12 +274,9 @@ export function ChatInterface() {
         }
     }, [updateStreamingContent]);
 
-    // Close research submenu when clicking outside
+    // Close model menu when clicking outside
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
-            if (researchRef.current && !researchRef.current.contains(event.target as Node)) {
-                setShowResearchSubmenu(false);
-            }
             if (modelMenuRef.current && !modelMenuRef.current.contains(event.target as Node)) {
                 setShowModelMenu(false);
             }
@@ -323,49 +284,6 @@ export function ChatInterface() {
         document.addEventListener("mousedown", handleClickOutside);
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, []);
-
-    // Dynamic positioning for research submenu
-    useEffect(() => {
-        if (!showResearchSubmenu || !submenuRef.current || !researchRef.current) return;
-
-        const calculatePosition = () => {
-            const button = researchRef.current!.getBoundingClientRect();
-            const submenu = submenuRef.current!.getBoundingClientRect();
-            const viewport = {
-                width: window.innerWidth,
-                height: window.innerHeight,
-            };
-
-            // Calculate available space in each direction
-            const spaceRight = viewport.width - button.right;
-            const spaceLeft = button.left;
-            const spaceBottom = viewport.height - button.bottom;
-            const spaceTop = button.top;
-
-            // Determine horizontal position (prefer right, fall back to left)
-            const x: 'left' | 'right' = spaceRight >= submenu.width ? 'right' :
-                                        spaceLeft >= submenu.width ? 'left' : 'right';
-
-            // Determine vertical position (prefer bottom, fall back to top)
-            const y: 'top' | 'bottom' = spaceBottom >= submenu.height + 12 ? 'bottom' :
-                                        spaceTop >= submenu.height + 12 ? 'top' : 'bottom';
-
-            setSubmenuPosition({ x, y });
-        };
-
-        // Calculate immediately
-        calculatePosition();
-
-        // Recalculate on scroll/resize
-        const handleReposition = () => calculatePosition();
-        window.addEventListener('scroll', handleReposition, true);
-        window.addEventListener('resize', handleReposition);
-
-        return () => {
-            window.removeEventListener('scroll', handleReposition, true);
-            window.removeEventListener('resize', handleReposition);
-        };
-    }, [showResearchSubmenu]);
 
     // Check for scenario from URL query parameter (from sidebar menu)
     useEffect(() => {
@@ -399,6 +317,13 @@ export function ChatInterface() {
         endProgress: endAgentProgress,
         clearProgress: clearAgentProgress,
     } = useAgentProgressStore.getState();
+
+    // Execution progress store - plan-execution binding
+    const {
+        reset: resetExecutionProgress,
+        setStreaming: setExecutionStreaming,
+        addEvent: addExecutionEvent,
+    } = useExecutionProgressStore.getState();
 
     // Computer store - actions via getState() (stable references)
     const {
@@ -509,6 +434,7 @@ export function ChatInterface() {
         setLoading(false);
         setStreaming(false);
         endAgentProgress();
+        setExecutionStreaming(false);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeConversationId]);
 
@@ -563,6 +489,7 @@ export function ChatInterface() {
         setLoading(false);
         setStreaming(false);
         endAgentProgress();
+        setExecutionStreaming(false);
 
         // Add cancelled message to conversation
         if (activeConversationId) {
@@ -574,7 +501,7 @@ export function ChatInterface() {
                 content: cancelledMessage,
             });
         }
-    }, [flushTokenBatch, setLoading, setStreaming, endAgentProgress, activeConversationId, addMessage, tChat]);
+    }, [flushTokenBatch, setLoading, setStreaming, endAgentProgress, setExecutionStreaming, activeConversationId, addMessage, tChat]);
 
     const handleSubmit = async () => {
         if (!input.trim() || isLoading || isUploading) return;
@@ -693,6 +620,10 @@ export function ChatInterface() {
         // Start agent progress for sidebar visibility
         startAgentProgress(conversationId, "task");
 
+        // Initialize execution progress tracking
+        resetExecutionProgress();
+        setExecutionStreaming(true);
+
         // Reset manual tab selection so view follows agent for this new query
         resetComputerUserSelectedMode();
 
@@ -724,6 +655,7 @@ export function ChatInterface() {
             ctx.seenEventKeys.add(eventKey);
 
             addAgentEvent(event);
+            addExecutionEvent(event);
             setStreamingEvents(prev => [...prev, createTimestampedEvent(event)]);
             ctx.collectedEvents.push(event);
         };
@@ -981,6 +913,7 @@ export function ChatInterface() {
             setLoading(false);
             setStreaming(false);
             endAgentProgress();
+        setExecutionStreaming(false);
         }
     };
 
@@ -1049,6 +982,10 @@ export function ChatInterface() {
         // Start agent progress for sidebar visibility
         startAgentProgress(conversationId, agentType);
 
+        // Initialize execution progress tracking
+        resetExecutionProgress();
+        setExecutionStreaming(true);
+
         // Reset manual tab selection so view follows agent for this new query
         resetComputerUserSelectedMode();
 
@@ -1080,6 +1017,7 @@ export function ChatInterface() {
             ctx.seenEventKeys.add(eventKey);
 
             addAgentEvent(event);
+            addExecutionEvent(event);
             setStreamingEvents(prev => [...prev, createTimestampedEvent(event)]);
             ctx.collectedEvents.push(event);
         };
@@ -1339,6 +1277,7 @@ export function ChatInterface() {
             setLoading(false);
             setStreaming(false);
             endAgentProgress();
+        setExecutionStreaming(false);
         }
     };
 
@@ -1429,38 +1368,6 @@ export function ChatInterface() {
             action: "cancel",
         });
     }, [activeInterrupt, handleInterruptResponse]);
-
-    const handleAgentSelect = (agent: AgentType) => {
-        if (agent === "research") {
-            // Toggle research submenu
-            setShowResearchSubmenu(!showResearchSubmenu);
-            return;
-        }
-        // For non-research agents, select directly
-        if (selectedAgent === agent) {
-            // Clicking same agent deselects it
-            setSelectedAgent(null);
-            setSelectedScenario(null);
-        } else {
-            setSelectedAgent(agent);
-            setSelectedScenario(null);
-        }
-        setShowResearchSubmenu(false);
-        inputRef.current?.focus();
-    };
-
-    const handleScenarioSelect = (scenario: ResearchScenario) => {
-        if (selectedAgent === "research" && selectedScenario === scenario) {
-            // Clicking same scenario deselects it
-            setSelectedAgent(null);
-            setSelectedScenario(null);
-        } else {
-            setSelectedAgent("research");
-            setSelectedScenario(scenario);
-        }
-        setShowResearchSubmenu(false);
-        inputRef.current?.focus();
-    };
 
     const isProcessing = isLoading;
     const hasMessages = messages.length > 0 || streamingContent || isLoading;
@@ -1696,128 +1603,6 @@ export function ChatInterface() {
                         </div>
                     </div>
 
-                    {/* Agent selection - minimal pills (only on home view) */}
-                    {!hasMessages && (
-                        <div className="mt-6">
-                            <div className="flex items-center justify-center gap-2.5 flex-wrap">
-                                {AGENT_KEYS.map((agent) => {
-                                    const isSelected = selectedAgent === agent || (agent === "research" && selectedScenario);
-                                    return (
-                                        <div key={agent} className="relative" ref={agent === "research" ? researchRef : undefined}>
-                                            <button
-                                                onClick={() => handleAgentSelect(agent)}
-                                                className={cn(
-                                                    "relative flex items-center gap-2 px-3.5 py-2 rounded-full transition-colors",
-                                                    "text-sm font-medium",
-                                                    isSelected
-                                                        ? "bg-primary text-primary-foreground"
-                                                        : "bg-secondary/50 text-muted-foreground border border-border/40 hover:bg-secondary hover:text-foreground hover:border-border/60"
-                                                )}
-                                            >
-                                                {/* Selection checkmark */}
-                                                {isSelected && (
-                                                    <span className="flex items-center justify-center w-4 h-4 rounded-full bg-primary-foreground text-primary">
-                                                        <Check className="w-3 h-3" strokeWidth={3} />
-                                                    </span>
-                                                )}
-                                                {!isSelected && (
-                                                    <span className="text-muted-foreground">
-                                                        {AGENT_ICONS[agent]}
-                                                    </span>
-                                                )}
-                                                <span>{tAgents(`${agent}.name`)}</span>
-                                                {agent === "research" && selectedScenario && (
-                                                    <span className="text-xs opacity-70">
-                                                        · {tResearch(`${selectedScenario}.name`)} · {tResearch(`depth.${selectedDepth}.name`)}
-                                                    </span>
-                                                )}
-                                            </button>
-
-                                            {/* Research scenarios submenu */}
-                                            {agent === "research" && showResearchSubmenu && (
-                                                <>
-                                                    {/* Backdrop for dismissal */}
-                                                    <div className="fixed inset-0 z-40" onClick={() => setShowResearchSubmenu(false)} />
-
-                                                    <div
-                                                        ref={submenuRef}
-                                                        className={cn(
-                                                            "absolute z-50",
-                                                            submenuPosition.x === 'right' ? 'left-0' : 'right-0',
-                                                            submenuPosition.y === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'
-                                                        )}
-                                                    >
-                                                        <div className="relative bg-card border border-border rounded-xl overflow-hidden w-[260px]"
-                                                             style={{ maxWidth: 'min(260px, calc(100vw - 2rem))' }}
-                                                        >
-                                                        {/* Scenarios section */}
-                                                        <div className="p-2">
-                                                            <div className="grid grid-cols-2 gap-1.5">
-                                                                {SCENARIO_KEYS.map((scenario) => (
-                                                                    <button
-                                                                        key={scenario}
-                                                                        onClick={() => handleScenarioSelect(scenario)}
-                                                                        className={cn(
-                                                                            "flex flex-col items-center gap-1.5 p-2.5 rounded-lg transition-colors",
-                                                                            selectedScenario === scenario
-                                                                                ? "bg-primary text-primary-foreground"
-                                                                                : "bg-secondary text-muted-foreground hover:text-foreground"
-                                                                        )}
-                                                                    >
-                                                                        <span className={cn(
-                                                                            "flex items-center justify-center w-8 h-8 rounded-lg transition-colors",
-                                                                            selectedScenario === scenario
-                                                                                ? "bg-primary-foreground text-primary"
-                                                                                : "bg-muted text-muted-foreground"
-                                                                        )}>
-                                                                            {SCENARIO_ICONS[scenario]}
-                                                                        </span>
-                                                                        <span className="text-xs font-medium text-center leading-tight">
-                                                                            {tResearch(`${scenario}.name`)}
-                                                                        </span>
-                                                                    </button>
-                                                                ))}
-                                                            </div>
-                                                        </div>
-
-                                                        {/* Depth selector */}
-                                                        <div className="border-t border-border bg-secondary/50 px-3 py-2.5">
-                                                            <div className="flex items-center justify-between gap-3">
-                                                                <span className="text-xs font-medium text-muted-foreground">
-                                                                    {tResearch("depth.label")}
-                                                                </span>
-                                                                <div className="flex gap-1">
-                                                                    {DEPTH_KEYS.map((depth) => (
-                                                                        <button
-                                                                            key={depth}
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                setSelectedDepth(depth);
-                                                                            }}
-                                                                            className={cn(
-                                                                                "flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors",
-                                                                                selectedDepth === depth
-                                                                                    ? "bg-primary text-primary-foreground"
-                                                                                    : "bg-card text-muted-foreground hover:text-foreground"
-                                                                            )}
-                                                                        >
-                                                                            {DEPTH_ICONS[depth]}
-                                                                            <span>{tResearch(`depth.${depth}.name`)}</span>
-                                                                        </button>
-                                                                    ))}
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                    </div>
-                                                </>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
                 </div>
             </div>
 

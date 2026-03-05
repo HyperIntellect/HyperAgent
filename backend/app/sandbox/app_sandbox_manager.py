@@ -554,6 +554,9 @@ class AppSandboxManager:
             else:
                 preview_url = raw_url
 
+            # User-friendly display URL (what the dev server looks like inside the sandbox)
+            display_url = f"http://localhost:{server_port}"
+
             # Start the dev server using E2B's background mode
             # The background=True flag runs the command asynchronously
             logger.info(
@@ -698,10 +701,11 @@ fi
                 return {
                     "success": True,  # Sandbox is running, just server might be slow
                     "preview_url": session.preview_url,
+                    "display_url": display_url,
                     "port": server_port,
                     "command": start_cmd,
                     "message": (
-                        f"Dev server starting at {session.preview_url} "
+                        f"Dev server starting at {display_url} "
                         "(may take a moment to be ready)"
                     ),
                     "warning": "Server port not yet responding. It may still be starting up.",
@@ -717,9 +721,10 @@ fi
             return {
                 "success": True,
                 "preview_url": session.preview_url,
+                "display_url": display_url,
                 "port": server_port,
                 "command": start_cmd,
-                "message": f"Dev server running at {session.preview_url}",
+                "message": f"Dev server running at {display_url}",
             }
 
         except Exception as e:
