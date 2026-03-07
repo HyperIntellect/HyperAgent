@@ -16,6 +16,8 @@ logger = get_logger(__name__)
 SCRATCHPAD_MEMORY_TYPE = "procedural"
 SCRATCHPAD_NAMESPACE = "scratchpad"
 SCRATCHPAD_MAX_READ_CHARS = 4000
+SCRATCHPAD_SESSION_TTL_SECONDS = 3600  # 1 hour
+SCRATCHPAD_MAX_SESSION_ENTRIES = 500
 
 
 @dataclass
@@ -43,6 +45,25 @@ class ScratchpadService:
         if task_id:
             return f"task:{task_id}"
         return "default"
+
+    def _evict_stale_sessions(self) -> None:
+        """Remove expired session entries. Must be called inside self._lock."""
+        if not self._session_notes:
+            return
+        now = time.time()
+        cutoff = now - SCRATCHPAD_SESSION_TTL_SECONDS
+        stale_keys = [
+            k for k, v in self._session_notes.items() if v.updated_at < cutoff
+        ]
+        for k in stale_keys:
+            del self._session_notes[k]
+        # Hard cap on remaining entries
+        if len(self._session_notes) > SCRATCHPAD_MAX_SESSION_ENTRIES:
+            sorted_keys = sorted(
+                self._session_notes, key=lambda k: self._session_notes[k].updated_at,
+            )
+            for k in sorted_keys[: len(self._session_notes) - SCRATCHPAD_MAX_SESSION_ENTRIES]:
+                del self._session_notes[k]
 
     def _clip_notes(self, notes: str, max_chars: int = SCRATCHPAD_MAX_READ_CHARS) -> str:
         if len(notes) <= max_chars:
@@ -73,6 +94,7 @@ class ScratchpadService:
             if not user_id:
                 return entry
             async with self._lock:
+                self._evict_stale_sessions()
                 self._session_notes[(user_id, task_id or "", effective_namespace)] = entry
             return entry
 
@@ -83,34 +105,21 @@ class ScratchpadService:
             return entry
 
         try:
+            from sqlalchemy import select
+
             from app.db.base import async_session_maker
             from app.db.models import Memory
-            from sqlalchemy import select
 
             async with async_session_maker() as session:
                 stmt = (
                     select(Memory)
                     .where(Memory.user_id == user_id)
                     .where(Memory.memory_type == SCRATCHPAD_MEMORY_TYPE)
+                    .where(Memory.metadata_json.contains(f'"key": "{effective_namespace}"'))
+                    .where(Memory.metadata_json.contains(f'"namespace": "{SCRATCHPAD_NAMESPACE}"'))
                 )
                 result = await session.execute(stmt)
-                candidates = result.scalars().all()
-
-                target = None
-                for row in candidates:
-                    meta = {}
-                    if row.metadata_json:
-                        try:
-                            meta = json.loads(row.metadata_json)
-                        except (json.JSONDecodeError, TypeError):
-                            meta = {}
-                    if (
-                        meta.get("namespace") == SCRATCHPAD_NAMESPACE
-                        and meta.get("scratchpad_scope") == "persistent"
-                        and meta.get("key") == effective_namespace
-                    ):
-                        target = row
-                        break
+                target = result.scalar_one_or_none()
 
                 metadata = {
                     "namespace": SCRATCHPAD_NAMESPACE,
@@ -164,35 +173,30 @@ class ScratchpadService:
 
         if settings.context_offloading_persistent_enabled:
             try:
-                from app.db.base import async_session_maker
-                from app.db.models import Memory
                 from sqlalchemy import select
 
+                from app.db.base import async_session_maker
+                from app.db.models import Memory
+
                 async with async_session_maker() as session:
+                    ns_filter = f'"namespace": "{SCRATCHPAD_NAMESPACE}"'
+                    key_filter = f'"key": "{effective_namespace}"'
                     stmt = (
                         select(Memory)
                         .where(Memory.user_id == user_id)
                         .where(Memory.memory_type == SCRATCHPAD_MEMORY_TYPE)
+                        .where(Memory.metadata_json.contains(key_filter))
+                        .where(Memory.metadata_json.contains(ns_filter))
                     )
                     result = await session.execute(stmt)
-                    for row in result.scalars().all():
-                        meta = {}
-                        if row.metadata_json:
-                            try:
-                                meta = json.loads(row.metadata_json)
-                            except (json.JSONDecodeError, TypeError):
-                                meta = {}
-                        if (
-                            meta.get("namespace") == SCRATCHPAD_NAMESPACE
-                            and meta.get("scratchpad_scope") == "persistent"
-                            and meta.get("key") == effective_namespace
-                        ):
-                            return ScratchpadPayload(
-                                notes=self._clip_notes(row.content),
-                                scope="persistent",
-                                namespace=effective_namespace,
-                                updated_at=time.time(),
-                            )
+                    row = result.scalar_one_or_none()
+                    if row:
+                        return ScratchpadPayload(
+                            notes=self._clip_notes(row.content),
+                            scope="persistent",
+                            namespace=effective_namespace,
+                            updated_at=time.time(),
+                        )
             except Exception as e:
                 logger.warning("scratchpad_persistent_read_fallback", error=str(e))
 

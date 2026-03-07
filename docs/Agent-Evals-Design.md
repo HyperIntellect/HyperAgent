@@ -15,8 +15,8 @@ backend/evals/
 ├── __init__.py              # Module exports
 ├── conftest.py              # Pytest fixtures with mock LLMs
 ├── datasets/
-│   ├── routing.json         # 25 routing test cases
-│   ├── tool_selection.json  # 20 tool selection test cases
+│   ├── routing.json         # 31 routing test cases (incl. adversarial)
+│   ├── tool_selection.json  # 23 tool selection test cases (all 7 skills)
 │   └── response_quality.json # 12 response quality test cases
 ├── mocks/
 │   ├── __init__.py

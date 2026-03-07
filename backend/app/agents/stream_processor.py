@@ -428,15 +428,23 @@ class StreamProcessor:
         """
         output = (event.get("data") or {}).get("output")
         if output is None:
+            logger.debug("usage_tracking_skip", reason="no_output")
             return
 
         usage_meta = getattr(output, "usage_metadata", None)
         if not usage_meta or not isinstance(usage_meta, dict):
+            logger.debug(
+                "usage_tracking_skip",
+                reason="no_usage_metadata",
+                has_attr=hasattr(output, "usage_metadata"),
+                meta_type=type(usage_meta).__name__ if usage_meta else "None",
+            )
             return
 
         input_tokens = usage_meta.get("input_tokens", 0)
         output_tokens = usage_meta.get("output_tokens", 0)
         if input_tokens == 0 and output_tokens == 0:
+            logger.debug("usage_tracking_skip", reason="zero_tokens")
             return
 
         cached_tokens = 0

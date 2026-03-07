@@ -6,11 +6,9 @@ to eliminate code duplication and ensure consistent behavior.
 
 import json
 import re
-from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from app.agents import events
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -172,48 +170,6 @@ def extract_and_add_image_events(
     except Exception as e:
         logger.error("failed_to_extract_image_events", error=str(e))
 
-
-def get_image_analysis_context(image_attachments: list[dict]) -> str:
-    """Get a text-only context string describing available images.
-
-    Used for prompts where multimodal content isn't directly supported.
-
-    Args:
-        image_attachments: List of image attachment dicts
-
-    Returns:
-        Text context describing available images
-    """
-    if not image_attachments:
-        return ""
-
-    image_info = []
-    for img in image_attachments:
-        filename = img.get("filename", "image")
-        mime_type = img.get("mime_type", "unknown")
-        image_info.append(f"- {filename} ({mime_type})")
-
-    return f"""
-The user has attached the following images that you can analyze using the analyze_image tool:
-{chr(10).join(image_info)}
-
-You can call the analyze_image tool with the image data to understand the image content.
-"""
-
-
-def truncate_content(content: str, max_length: int = 500) -> str:
-    """Truncate content to a maximum length.
-
-    Args:
-        content: Content to truncate
-        max_length: Maximum length
-
-    Returns:
-        Truncated content
-    """
-    if len(content) <= max_length:
-        return content
-    return content[:max_length]
 
 
 

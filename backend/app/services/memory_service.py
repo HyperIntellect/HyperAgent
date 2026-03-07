@@ -35,6 +35,8 @@ class MemoryType(str, Enum):
 
 ALL_MEMORY_TYPES = [t.value for t in MemoryType]
 
+MAX_MEMORIES_PER_EXTRACTION = 10
+
 
 UNSAFE_INSTRUCTION_PATTERNS = (
     r"\bignore\b.*\b(instruction|policy|rule|safety)\b",
@@ -55,6 +57,38 @@ SANITIZE_RENDER_PATTERNS = (
 def _is_unsafe_instruction(text: str) -> bool:
     lowered = text.lower()
     return any(re.search(pat, lowered) for pat in UNSAFE_INSTRUCTION_PATTERNS)
+
+
+def _score_memory_relevance(memory: MemoryEntry, query: str) -> float:
+    """Score memory relevance to current query (0.0–1.0).
+
+    Preferences always score 0.8+ (always relevant).
+    Procedural type gets a 0.7 base + keyword boost.
+    Other types scored by keyword overlap.
+    """
+    if memory.memory_type == MemoryType.PREFERENCE.value:
+        return 0.8
+
+    if not query:
+        return 0.5
+
+    query_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', query.lower()))
+    if not query_words:
+        return 0.5
+
+    content_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', memory.content.lower()))
+    overlap = len(query_words & content_words)
+    score = min(overlap / max(len(query_words), 1), 1.0)
+
+    # Base boost for procedural memories
+    if memory.memory_type == MemoryType.PROCEDURAL.value:
+        score = max(score, 0.7)
+
+    # Recency boost: +0.2 if accessed within 24 hours
+    if (time.time() - memory.last_accessed) < 86400:
+        score = min(score + 0.2, 1.0)
+
+    return score
 
 
 def _sanitize_memory_for_prompt(content: str) -> str:
@@ -104,15 +138,28 @@ class InMemoryStore:
         content: str,
         metadata: dict | None = None,
         source_conversation_id: str | None = None,
+        max_per_user: int | None = None,
     ) -> MemoryEntry:
         if user_id not in self._memories:
             self._memories[user_id] = []
 
         for existing in self._memories[user_id]:
             if existing.content.lower() == content.lower():
-                existing.last_accessed = time.time()
-                existing.access_count += 1
-                return existing
+                updated = MemoryEntry(
+                    id=existing.id,
+                    user_id=existing.user_id,
+                    memory_type=existing.memory_type,
+                    content=existing.content,
+                    metadata=existing.metadata,
+                    source_conversation_id=existing.source_conversation_id,
+                    created_at=existing.created_at,
+                    last_accessed=time.time(),
+                    access_count=existing.access_count + 1,
+                )
+                self._memories[user_id] = [
+                    updated if e.id == existing.id else e for e in self._memories[user_id]
+                ]
+                return updated
 
         entry = MemoryEntry(
             id=str(uuid.uuid4()),
@@ -123,23 +170,51 @@ class InMemoryStore:
             source_conversation_id=source_conversation_id,
         )
         self._memories[user_id].append(entry)
+
+        # Evict least-accessed if over the limit
+        if max_per_user is not None and self.count_memories(user_id) > max_per_user:
+            self.evict_least_accessed(user_id)
+
         return entry
 
     def get_memories(
-        self, user_id: str, memory_type: str | None = None, limit: int = 20
+        self,
+        user_id: str,
+        memory_type: str | None = None,
+        limit: int = 20,
+        decay_days: int | None = None,
     ) -> list[MemoryEntry]:
         entries = self._memories.get(user_id, [])
         if memory_type:
             entries = [e for e in entries if e.memory_type == memory_type]
+        # Decay filter: exclude stale memories
+        if decay_days is not None and decay_days > 0:
+            cutoff = time.time() - (decay_days * 86400)
+            entries = [e for e in entries if e.last_accessed >= cutoff]
         sorted_entries = sorted(
             entries,
             key=lambda e: (e.last_accessed, e.access_count),
             reverse=True,
         )
-        for e in sorted_entries[:limit]:
-            e.last_accessed = time.time()
-            e.access_count += 1
         return sorted_entries[:limit]
+
+    def count_memories(self, user_id: str) -> int:
+        """Count total memories for a user."""
+        return len(self._memories.get(user_id, []))
+
+    def evict_least_accessed(self, user_id: str) -> bool:
+        """Delete the least-accessed memory for a user. Returns True if one was evicted."""
+        entries = self._memories.get(user_id, [])
+        if not entries:
+            return False
+        # Find least accessed (lowest access_count, then oldest last_accessed)
+        least = min(entries, key=lambda e: (e.access_count, e.last_accessed))
+        # Don't evict quarantined memories
+        trust_level = (least.metadata or {}).get("trust_level", "trusted")
+        if trust_level == "quarantined":
+            return False
+        self._memories[user_id] = [e for e in entries if e.id != least.id]
+        return True
 
     def delete_memory(self, user_id: str, memory_id: str) -> bool:
         entries = self._memories.get(user_id, [])
@@ -245,11 +320,17 @@ class PersistentMemoryStore:
         metadata: dict | None = None,
         source_conversation_id: str | None = None,
     ) -> MemoryEntry:
-        """Add a memory, persisting to DB if available."""
+        """Add a memory, persisting to DB if available.
+
+        Enforces max_per_user eviction when memory_eviction_enabled is True.
+        """
+        from app.config import settings as _settings
+
         session = await self._get_session()
         if session is None:
             return self._fallback.add_memory(
-                user_id, memory_type, content, metadata, source_conversation_id
+                user_id, memory_type, content, metadata, source_conversation_id,
+                max_per_user=_settings.memory_max_per_user if _settings.memory_eviction_enabled else None,
             )
 
         try:
@@ -290,12 +371,46 @@ class PersistentMemoryStore:
                 await session.commit()
                 await session.refresh(new_memory)
                 logger.info("memory_added", user_id=user_id, memory_type=memory_type)
+
+                # Evict least-accessed if over limit
+                if _settings.memory_eviction_enabled:
+                    max_per_user = _settings.memory_max_per_user
+                    count_stmt = (
+                        select(func.count())
+                        .select_from(Memory)
+                        .where(Memory.user_id == user_id)
+                    )
+                    count_result = await session.execute(count_stmt)
+                    total = count_result.scalar() or 0
+
+                    if total > max_per_user:
+                        evict_stmt = (
+                            select(Memory)
+                            .where(Memory.user_id == user_id)
+                            .order_by(
+                                Memory.access_count.asc(),
+                                Memory.last_accessed.asc(),
+                            )
+                            .limit(1)
+                        )
+                        evict_result = await session.execute(evict_stmt)
+                        to_evict = evict_result.scalar_one_or_none()
+                        if to_evict and to_evict.id != new_memory.id:
+                            await session.delete(to_evict)
+                            await session.commit()
+                            logger.info(
+                                "memory_evicted",
+                                user_id=user_id,
+                                evicted_id=to_evict.id,
+                            )
+
                 return self._row_to_entry(new_memory)
 
         except Exception as e:
             logger.warning("memory_add_db_failed_using_fallback", error=str(e))
             return self._fallback.add_memory(
-                user_id, memory_type, content, metadata, source_conversation_id
+                user_id, memory_type, content, metadata, source_conversation_id,
+                max_per_user=_settings.memory_max_per_user if _settings.memory_eviction_enabled else None,
             )
 
     def get_memories(
@@ -305,15 +420,25 @@ class PersistentMemoryStore:
         return self._fallback.get_memories(user_id, memory_type=memory_type, limit=limit)
 
     async def get_memories_async(
-        self, user_id: str, memory_type: str | None = None, limit: int = 20
+        self,
+        user_id: str,
+        memory_type: str | None = None,
+        limit: int = 20,
+        decay_days: int | None = None,
     ) -> list[MemoryEntry]:
-        """Get memories from DB, falling back to in-memory."""
+        """Get memories from DB, falling back to in-memory.
+
+        Args:
+            decay_days: If set, exclude memories not accessed within N days.
+        """
         session = await self._get_session()
         if session is None:
-            return self._fallback.get_memories(user_id, memory_type=memory_type, limit=limit)
+            return self._fallback.get_memories(
+                user_id, memory_type=memory_type, limit=limit, decay_days=decay_days,
+            )
 
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime, timedelta, timezone
 
             from sqlalchemy import select
 
@@ -326,6 +451,9 @@ class PersistentMemoryStore:
                 )
                 if memory_type:
                     stmt = stmt.where(Memory.memory_type == memory_type)
+                if decay_days is not None and decay_days > 0:
+                    cutoff = datetime.now(timezone.utc) - timedelta(days=decay_days)
+                    stmt = stmt.where(Memory.last_accessed >= cutoff)
                 stmt = stmt.order_by(
                     Memory.last_accessed.desc(),
                     Memory.access_count.desc(),
@@ -333,19 +461,13 @@ class PersistentMemoryStore:
 
                 result = await session.execute(stmt)
                 rows = result.scalars().all()
-
-                # Update last_accessed for returned memories
-                now = datetime.now(timezone.utc)
-                for row in rows:
-                    row.last_accessed = now
-                    row.access_count = (row.access_count or 0) + 1
-                await session.commit()
-
                 return [self._row_to_entry(r) for r in rows]
 
         except Exception as e:
             logger.warning("memory_get_db_failed_using_fallback", error=str(e))
-            return self._fallback.get_memories(user_id, memory_type=memory_type, limit=limit)
+            return self._fallback.get_memories(
+                user_id, memory_type=memory_type, limit=limit, decay_days=decay_days,
+            )
 
     def delete_memory(self, user_id: str, memory_id: str) -> bool:
         """Synchronous delete - delegates to fallback."""
@@ -455,9 +577,44 @@ class PersistentMemoryStore:
         memories = self.get_memories(user_id, limit=limit)
         return _format_memories(memories)
 
-    async def format_memories_for_prompt_async(self, user_id: str, limit: int = 10) -> str:
-        """Format user memories as a prompt section, grouped by type (async/DB)."""
-        memories = await self.get_memories_async(user_id, limit=limit)
+    async def format_memories_for_prompt_async(
+        self,
+        user_id: str,
+        limit: int = 10,
+        query: str | None = None,
+    ) -> str:
+        """Format user memories as a prompt section, grouped by type (async/DB).
+
+        When *query* is provided, memories are scored for relevance and only
+        those above the configured threshold are included.
+        """
+        from app.config import settings as _settings
+
+        decay_days = (
+            _settings.memory_decay_days if _settings.memory_eviction_enabled else None
+        )
+        # Fetch more than needed so relevance filtering has a pool to score
+        fetch_limit = limit * 3 if query else limit
+        memories = await self.get_memories_async(
+            user_id, limit=fetch_limit, decay_days=decay_days,
+        )
+
+        if query and memories:
+            threshold = _settings.memory_relevance_threshold
+            scored = [
+                (m, _score_memory_relevance(m, query)) for m in memories
+            ]
+            memories = [
+                m for m, score in scored if score >= threshold
+            ]
+            # Re-sort by score descending, take top `limit`
+            scored_filtered = sorted(
+                [(m, _score_memory_relevance(m, query)) for m in memories],
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            memories = [m for m, _ in scored_filtered[:limit]]
+
         return _format_memories(memories)
 
 
@@ -653,7 +810,7 @@ async def extract_memories_from_conversation(
 
         store = get_memory_store()
         entries = []
-        for item in extracted:
+        for item in extracted[:MAX_MEMORIES_PER_EXTRACTION]:
             if isinstance(item, dict) and "content" in item:
                 mem_type = item.get("type", "fact")
                 if mem_type not in ALL_MEMORY_TYPES:

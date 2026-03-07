@@ -130,6 +130,54 @@
       "expected_tool": null,
       "category": "image",
       "description": "Realistic image generation should invoke image_generation skill"
+    },
+    {
+      "id": "skill_slide_generation",
+      "input": "Create a presentation about our Q3 financial results",
+      "expected_skill": "slide_generation",
+      "expected_tool": null,
+      "category": "slides",
+      "description": "Presentation creation should invoke slide_generation skill"
+    },
+    {
+      "id": "skill_slide_deck",
+      "input": "Make a slide deck explaining the benefits of renewable energy",
+      "expected_skill": "slide_generation",
+      "expected_tool": null,
+      "category": "slides",
+      "description": "Slide deck creation should invoke slide_generation skill"
+    },
+    {
+      "id": "skill_app_builder",
+      "input": "Build a web app for managing my todo list with a clean UI",
+      "expected_skill": "app_builder",
+      "expected_tool": null,
+      "category": "app",
+      "description": "Web app building should invoke app_builder skill"
+    },
+    {
+      "id": "skill_app_create",
+      "input": "Create an app that shows a weather dashboard",
+      "expected_skill": "app_builder",
+      "expected_tool": null,
+      "category": "app",
+      "description": "App creation should invoke app_builder skill"
+    },
+    {
+      "id": "skill_task_planning",
+      "input": "Plan a project to migrate our database from MySQL to PostgreSQL",
+      "expected_skill": "task_planning",
+      "expected_tool": null,
+      "category": "planning",
+      "description": "Project planning should invoke task_planning skill"
+    },
+    {
+      "id": "skill_task_breakdown",
+      "input": "Break down the task of building a microservices architecture and create a plan",
+      "expected_skill": "task_planning",
+      "expected_tool": null,
+      "category": "planning",
+      "description": "Task breakdown should invoke task_planning skill"
     }
   ]
 }

@@ -15,8 +15,8 @@ from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from redis.asyncio import Redis
-from sqlalchemy import desc, select
+from redis.asyncio import ConnectionPool, Redis
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -30,6 +30,16 @@ from app.repository import deep_research_repository
 from app.workers.task_queue import task_queue
 
 logger = get_logger(__name__)
+
+_redis_pool: ConnectionPool | None = None
+
+
+def _get_redis_pool() -> ConnectionPool:
+    global _redis_pool
+    if _redis_pool is None:
+        _redis_pool = ConnectionPool.from_url(settings.redis_url, decode_responses=True)
+    return _redis_pool
+
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -242,7 +252,7 @@ async def stream_task_progress(
             raise HTTPException(status_code=403, detail="Access denied")
 
     async def event_generator() -> AsyncGenerator[dict, None]:
-        redis = Redis.from_url(settings.redis_url, decode_responses=True)
+        redis = Redis(connection_pool=_get_redis_pool())
         pubsub = redis.pubsub()
         channel = f"hyperagent:progress:{task_id}"
 
@@ -275,7 +285,6 @@ async def stream_task_progress(
             }
         finally:
             await pubsub.unsubscribe(channel)
-            await redis.aclose()
 
     return EventSourceResponse(event_generator())
 
@@ -289,18 +298,26 @@ async def list_tasks(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """List user's tasks with optional filtering."""
-    query = (
+    base_filter = ResearchTask.user_id == current_user.id
+
+    # Count total matching tasks
+    count_query = select(func.count()).select_from(ResearchTask).where(base_filter)
+    if status:
+        count_query = count_query.where(ResearchTask.status == status)
+    total = (await db.execute(count_query)).scalar_one()
+
+    # Fetch paginated results
+    list_query = (
         select(ResearchTask)
-        .where(ResearchTask.user_id == current_user.id)
+        .where(base_filter)
         .order_by(desc(ResearchTask.created_at))
         .limit(limit)
         .offset(offset)
     )
-
     if status:
-        query = query.where(ResearchTask.status == status)
+        list_query = list_query.where(ResearchTask.status == status)
 
-    result = await db.execute(query)
+    result = await db.execute(list_query)
     tasks = result.scalars().all()
 
     return TaskListResponse(
@@ -314,7 +331,7 @@ async def list_tasks(
             )
             for t in tasks
         ],
-        total=len(tasks),
+        total=total,
         limit=limit,
         offset=offset,
     )

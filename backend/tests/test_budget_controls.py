@@ -1,14 +1,14 @@
 """Tests for budget pressure controls in supervisor."""
 
-from app.agents.supervisor import (
-    _apply_budget_pressure_defaults,
-    _derive_budget_pressure_state,
+from app.agents.budget import (
+    apply_budget_pressure_defaults,
+    derive_budget_pressure_state,
 )
 from app.models.schemas import ResearchDepth
 
 
 def test_derives_budget_pressure_ratio():
-    budget_state = _derive_budget_pressure_state(
+    budget_state = derive_budget_pressure_state(
         budget={"max_tokens": 1000, "max_tool_calls": 10},
         usage_totals={"total_tokens": 500, "cost_usd": 0.0},
         tool_calls_count=2,
@@ -19,7 +19,7 @@ def test_derives_budget_pressure_ratio():
 
 
 def test_marks_budget_exhausted():
-    budget_state = _derive_budget_pressure_state(
+    budget_state = derive_budget_pressure_state(
         budget={"max_cost_usd": 0.1},
         usage_totals={"total_tokens": 0, "cost_usd": 0.11},
         tool_calls_count=0,
@@ -29,7 +29,7 @@ def test_marks_budget_exhausted():
 
 
 def test_applies_strict_budget_downgrade_to_lite():
-    tier, depth, adjustment = _apply_budget_pressure_defaults(
+    tier, depth, adjustment = apply_budget_pressure_defaults(
         budget={"max_cost_usd": 0.03},
         mode="task",
         tier="max",
@@ -42,7 +42,7 @@ def test_applies_strict_budget_downgrade_to_lite():
 
 
 def test_applies_research_depth_downgrade_on_strict_budget():
-    tier, depth, adjustment = _apply_budget_pressure_defaults(
+    tier, depth, adjustment = apply_budget_pressure_defaults(
         budget={"max_tokens": 3000},
         mode="research",
         tier="max",
@@ -54,7 +54,7 @@ def test_applies_research_depth_downgrade_on_strict_budget():
 
 
 def test_applies_moderate_downgrade_max_to_pro():
-    tier, depth, adjustment = _apply_budget_pressure_defaults(
+    tier, depth, adjustment = apply_budget_pressure_defaults(
         budget={"max_tokens": 15000},
         mode="task",
         tier="max",

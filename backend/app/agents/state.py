@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import operator
 from enum import Enum
-from typing import Annotated, Any, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
 
 from langchain_core.messages import BaseMessage
 
-from app.models.schemas import ModelTier, ResearchDepth
-from app.services.search import SearchResult
+from app.agents.tools.handoff import HandoffInfo, SharedAgentMemory
+from app.models.schemas import ModelTier
+
+if TYPE_CHECKING:
+    from app.models.schemas import ResearchDepth
+    from app.services.search import SearchResult
 
 
 def _override_reducer(a, b):
@@ -31,11 +35,6 @@ class AgentType(str, Enum):
 
     TASK = "task"
     RESEARCH = "research"
-
-
-# Re-export HandoffInfo and SharedAgentMemory from handoff module for backward compatibility
-# These types are now consolidated in the handoff module
-from app.agents.tools.handoff import HandoffInfo, SharedAgentMemory
 
 
 class SupervisorState(TypedDict, total=False):
@@ -97,6 +96,7 @@ class SupervisorState(TypedDict, total=False):
     image_attachments: list[
         dict
     ]  # Base64-encoded image data for vision tools [{id, filename, base64_data, mime_type}]
+    attachment_context: str | None  # Untrusted extracted text from attached files
     provider: str
     model: str | None
     tier: ModelTier | None  # User-specified tier override
@@ -122,8 +122,7 @@ class TaskState(SupervisorState, total=False):
     current_step_index: int  # 0-indexed pointer into execution_plan
 
     # Query complexity classification (auto-planning)
-    # Set by classify_node: "simple", "moderate", or "complex"
-    query_complexity: str | None
+    query_complexity: Literal["simple", "moderate", "complex"] | None
 
     # Self-correction / verification loop
     # consecutive_errors uses an override reducer (lambda a, b: b) so it is
@@ -146,6 +145,9 @@ class TaskState(SupervisorState, total=False):
     # Uses override reducer so the node always sets the full list.
     last_tool_calls_hash: Annotated[list[str], _override_reducer]
 
+    # Wall-clock timeout tracking (seconds since epoch, set on first reason_node entry)
+    loop_start_time: float | None  # monotonic time when the agent loop started
+
     # Step timing for duration tracking
     step_start_time: int | None  # Timestamp (ms) when the current step started
 
@@ -155,8 +157,8 @@ class TaskState(SupervisorState, total=False):
     # Enhanced verification
     verification_results: list[dict]  # Detailed per-step verification outcomes
     verified_steps: list[int]  # Step numbers that have been verified
-    verification_status: str | None  # Latest verifier status: passed|partial|failed|error
-    verification_attempts: int  # Number of adaptation attempts after failed verification
+    verification_status: Literal["passed", "partial", "failed", "error"] | None
+    verification_attempts: int
     verification_retry_hint: str | None  # Suggested retry/adaptation guidance
 
 
@@ -189,6 +191,143 @@ class ResearchState(SupervisorState, total=False):
     analysis: str
     synthesis: str
     report_chunks: list[str]
+
+
+# =============================================================================
+# New Agent Loop State Types (Orchestrator / Planner / Executor)
+# =============================================================================
+
+
+class PlanStep(TypedDict):
+    """A single step in an execution plan."""
+
+    step_number: int
+    goal: str
+    tools_hint: list[str]
+    expected_output: str
+
+
+class StepResult(TypedDict):
+    """Result of executing a single plan step."""
+
+    step_number: int
+    status: Literal["completed", "failed"]
+    output: str
+    events: list[dict]
+
+
+class OrchestratorState(SupervisorState, total=False):
+    """State for the orchestrator graph.
+
+    Extends SupervisorState with planning, execution, and verification fields.
+    The orchestrator classifies queries, dispatches steps to the executor,
+    and verifies results before producing a final response.
+    """
+
+    # System
+    system_prompt: str
+    depth: int
+    has_error: bool
+
+    # Classification
+    query_complexity: Literal["simple", "moderate", "complex"] | None
+
+    # Plan
+    execution_plan: list[PlanStep]
+    current_step_index: int
+    step_results: Annotated[list[StepResult], operator.add]
+
+    # Verification
+    verification_status: Literal["passed", "partial", "failed", "error"] | None
+    verification_attempts: Annotated[int, _override_reducer]
+
+
+class PlannerState(TypedDict, total=False):
+    """State for the planner subgraph.
+
+    The planner decomposes a complex query into a sequence of plan steps.
+    """
+
+    # Input
+    query: str
+    messages: list[dict[str, Any]]
+    mode: str | None
+    provider: str
+    model: str | None
+    tier: ModelTier | None
+    locale: str
+
+    # Revision context (feedback from failed verification)
+    revision_context: str | None
+
+    # Output
+    plan_steps: list[PlanStep]
+    complexity_assessment: Literal["simple", "moderate", "complex"] | None
+    events: Annotated[list[dict[str, Any]], operator.add]
+
+
+class ExecutorState(TypedDict, total=False):
+    """State for the executor subgraph.
+
+    The executor runs a ReAct loop for a single plan step.
+    """
+
+    # Step info
+    step_goal: str
+    step_number: int
+    tools_hint: list[str]
+    system_prompt: str
+
+    # Messages
+    messages: list[dict[str, Any]]
+    lc_messages: list[BaseMessage]
+
+    # Identity / metadata
+    user_id: str | None
+    task_id: str | None
+    run_id: str | None
+    provider: str
+    model: str | None
+    tier: ModelTier | None
+    locale: str
+    skills: list[str]
+    mode: str | None
+
+    # Attachments
+    attachment_ids: list[str]
+    image_attachments: list[dict]
+    attachment_context: str | None
+    depth: int
+
+    # Loop control
+    tool_iterations: int
+    consecutive_errors: Annotated[int, _override_reducer]
+    last_tool_calls_hash: Annotated[list[str], _override_reducer]
+    loop_start_time: float | None
+
+    # HITL
+    pending_interrupt: dict[str, Any] | None
+    auto_approve_tools: list[str]
+    hitl_enabled: bool
+
+    # Context
+    context_summary: str | None
+    prefix_hash: str | None
+    active_todo: str | None
+    files_uploaded_to_sandbox: bool
+
+    # Reflection (quality gate after ReAct loop)
+    reflection_count: Annotated[int, _override_reducer]  # times reflection has fired
+    reflection_verdict: Literal["pass", "retry", "complete_with_note"] | None
+    confidence_score: float | None  # 0.0–1.0 from reflect node
+    quality_assessment: str | None  # brief quality note from reflect node
+
+    # Output
+    result: str | None
+    status: Literal["completed", "failed", "error"] | None
+    events: Annotated[list[dict[str, Any]], operator.add]
+    pending_handoff: HandoffInfo | None
+    has_error: bool
 
 
 # =============================================================================

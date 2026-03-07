@@ -195,6 +195,8 @@
             "researching": "研究中...",
             "handoffTo": "正在委派给 {target}...",
             "skillCompleted": "技能完成：{skill}",
+            "planning": "规划中（{steps} 个步骤）...",
+            "executingStep": "步骤 {step}/{total}：{action}",
             "inProgress": "进行中",
             "completed": "已完成",
             "completedWithErrors": "完成但有错误",

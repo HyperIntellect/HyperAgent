@@ -8,7 +8,12 @@ Provides comprehensive guardrails at 4 integration points:
 """
 
 from app.guardrails.base import ScanResult, ViolationType
-from app.guardrails.scanners import input_scanner, output_scanner, tool_scanner
+from app.guardrails.scanners import (
+    input_scanner,
+    output_scanner,
+    tool_scanner,
+    untrusted_content_scanner,
+)
 
 __all__ = [
     "ScanResult",
@@ -16,4 +21,5 @@ __all__ = [
     "input_scanner",
     "output_scanner",
     "tool_scanner",
+    "untrusted_content_scanner",
 ]

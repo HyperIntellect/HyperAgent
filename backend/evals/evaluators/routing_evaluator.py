@@ -1,17 +1,8 @@
 """Routing accuracy evaluator for agent routing decisions."""
 
-from dataclasses import dataclass
 from typing import Any
 
-
-@dataclass
-class EvaluationResult:
-    """Result of an evaluation."""
-
-    key: str
-    score: float
-    comment: str | None = None
-    metadata: dict[str, Any] | None = None
+from evals.evaluators.base import EvaluationResult, compute_batch_stats
 
 
 class RoutingEvaluator:
@@ -75,7 +66,7 @@ class RoutingEvaluator:
             return {"accuracy": 0.0, "correct": 0, "total": 0}
 
         evaluations = []
-        category_stats: dict[str, dict[str, int]] = {}
+        categories = []
 
         for result in results:
             eval_result = self.evaluate(
@@ -84,33 +75,9 @@ class RoutingEvaluator:
                 query=result.get("query"),
             )
             evaluations.append(eval_result)
+            categories.append(result.get("category", "unknown"))
 
-            # Track per-category stats
-            category = result.get("category", "unknown")
-            if category not in category_stats:
-                category_stats[category] = {"correct": 0, "total": 0}
-            category_stats[category]["total"] += 1
-            if eval_result.score == 1.0:
-                category_stats[category]["correct"] += 1
-
-        correct = sum(1 for e in evaluations if e.score == 1.0)
-        total = len(evaluations)
-        accuracy = correct / total if total > 0 else 0.0
-
-        # Calculate per-category accuracy
-        category_accuracy = {
-            cat: stats["correct"] / stats["total"] if stats["total"] > 0 else 0.0
-            for cat, stats in category_stats.items()
-        }
-
-        return {
-            "accuracy": accuracy,
-            "correct": correct,
-            "total": total,
-            "category_accuracy": category_accuracy,
-            "category_stats": category_stats,
-            "evaluations": evaluations,
-        }
+        return compute_batch_stats(evaluations, categories)
 
 
 def routing_accuracy_evaluator(

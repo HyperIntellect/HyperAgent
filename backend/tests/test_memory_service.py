@@ -15,6 +15,7 @@ from app.services.memory_service import (
     _format_memory_item,
     _is_unsafe_instruction,
     _sanitize_memory_for_prompt,
+    _score_memory_relevance,
     extract_memories_from_conversation,
     get_memory_store,
 )
@@ -585,3 +586,190 @@ class TestGlobalStore:
         memories = store2.get_memories("user1")
         assert len(memories) == 1
         assert memories[0].content == "Persistent fact"
+
+
+# ---------------------------------------------------------------------------
+# Memory relevance scoring tests
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryRelevanceScoring:
+    def test_preference_always_high(self):
+        entry = MemoryEntry(
+            memory_type="preference",
+            content="User prefers Python",
+        )
+        score = _score_memory_relevance(entry, "build a React app")
+        assert score >= 0.8
+
+    def test_procedural_base_score(self):
+        entry = MemoryEntry(
+            memory_type="procedural",
+            content="Always run linter before committing",
+        )
+        score = _score_memory_relevance(entry, "something completely unrelated")
+        assert score >= 0.7
+
+    def test_fact_keyword_overlap(self):
+        entry = MemoryEntry(
+            memory_type="fact",
+            content="User is a Python developer who works on machine learning projects",
+        )
+        score_relevant = _score_memory_relevance(entry, "Python machine learning model")
+        score_irrelevant = _score_memory_relevance(entry, "JavaScript frontend React")
+        assert score_relevant > score_irrelevant
+
+    def test_empty_query_returns_default(self):
+        entry = MemoryEntry(memory_type="fact", content="Some fact")
+        score = _score_memory_relevance(entry, "")
+        assert score == 0.5
+
+    def test_recency_boost(self):
+        import time
+
+        recent = MemoryEntry(
+            memory_type="fact",
+            content="Deployed the API server",
+            last_accessed=time.time(),
+        )
+        old = MemoryEntry(
+            memory_type="fact",
+            content="Deployed the API server",
+            last_accessed=time.time() - 200000,
+        )
+        query = "deploy API"
+        assert _score_memory_relevance(recent, query) > _score_memory_relevance(old, query)
+
+
+# ---------------------------------------------------------------------------
+# Memory decay tests
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryDecay:
+    def test_old_memories_excluded_by_decay(self, mem_store):
+        import time
+
+        # Add a memory and manually set it as old
+        entry = mem_store.add_memory("user1", "fact", "Old fact")
+        # Manually adjust last_accessed to simulate old memory
+        for i, e in enumerate(mem_store._memories["user1"]):
+            if e.id == entry.id:
+                mem_store._memories["user1"][i] = MemoryEntry(
+                    id=e.id,
+                    user_id=e.user_id,
+                    memory_type=e.memory_type,
+                    content=e.content,
+                    metadata=e.metadata,
+                    created_at=e.created_at,
+                    last_accessed=time.time() - (100 * 86400),  # 100 days ago
+                    access_count=e.access_count,
+                )
+
+        # Add a recent memory
+        mem_store.add_memory("user1", "fact", "Recent fact")
+
+        # Without decay filter
+        all_memories = mem_store.get_memories("user1")
+        assert len(all_memories) == 2
+
+        # With 90-day decay filter
+        filtered = mem_store.get_memories("user1", decay_days=90)
+        assert len(filtered) == 1
+        assert filtered[0].content == "Recent fact"
+
+    def test_decay_zero_means_no_filter(self, mem_store):
+        mem_store.add_memory("user1", "fact", "A fact")
+        result = mem_store.get_memories("user1", decay_days=0)
+        assert len(result) == 1
+
+    def test_decay_none_means_no_filter(self, mem_store):
+        mem_store.add_memory("user1", "fact", "A fact")
+        result = mem_store.get_memories("user1", decay_days=None)
+        assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# Memory eviction tests
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryEviction:
+    def test_eviction_on_overflow(self, mem_store):
+        # Add 5 memories with max_per_user=5
+        for i in range(5):
+            mem_store.add_memory("user1", "fact", f"Fact {i}", max_per_user=5)
+        assert mem_store.count_memories("user1") == 5
+
+        # Adding #6 should evict one
+        mem_store.add_memory("user1", "fact", "Fact 5", max_per_user=5)
+        assert mem_store.count_memories("user1") == 5
+
+    def test_eviction_removes_least_accessed(self, mem_store):
+        import time
+
+        # Add memories with varying access patterns
+        for i in range(3):
+            mem_store.add_memory("user1", "fact", f"Fact {i}", max_per_user=5)
+
+        # Manually set access counts
+        entries = mem_store._memories["user1"]
+        mem_store._memories["user1"] = [
+            MemoryEntry(
+                id=e.id, user_id=e.user_id, memory_type=e.memory_type,
+                content=e.content, metadata=e.metadata,
+                created_at=e.created_at, last_accessed=e.last_accessed,
+                access_count=idx * 10,  # Fact 0 has 0, Fact 1 has 10, Fact 2 has 20
+            )
+            for idx, e in enumerate(entries)
+        ]
+
+        # Add a 4th with max=3, should evict Fact 0 (lowest access_count)
+        mem_store.add_memory("user1", "fact", "Fact 3", max_per_user=3)
+        assert mem_store.count_memories("user1") == 3
+        contents = {e.content for e in mem_store._memories["user1"]}
+        assert "Fact 0" not in contents  # Evicted
+        assert "Fact 3" in contents  # New one kept
+
+    def test_no_eviction_when_disabled(self, mem_store):
+        for i in range(5):
+            mem_store.add_memory("user1", "fact", f"Fact {i}")
+        assert mem_store.count_memories("user1") == 5
+        # No max_per_user → no eviction
+        mem_store.add_memory("user1", "fact", "Fact 5")
+        assert mem_store.count_memories("user1") == 6
+
+    def test_evict_least_accessed_empty(self, mem_store):
+        assert mem_store.evict_least_accessed("nonexistent") is False
+
+
+# ---------------------------------------------------------------------------
+# Relevance filtering in format_memories_for_prompt_async
+# ---------------------------------------------------------------------------
+
+
+class TestRelevanceFilteringAsync:
+    @pytest.mark.asyncio
+    async def test_relevance_filtering_with_query(self, store):
+        with patch.object(store, '_get_session', return_value=None):
+            store._fallback.add_memory("user1", "fact", "Expert in Python machine learning")
+            store._fallback.add_memory("user1", "fact", "Likes hiking on weekends")
+            store._fallback.add_memory("user1", "preference", "Prefers dark mode")
+
+            result = await store.format_memories_for_prompt_async(
+                "user1", query="Python data science project",
+            )
+            # Python memory should be included (keyword overlap)
+            assert "Python" in result
+            # Preference always included
+            assert "dark mode" in result
+
+    @pytest.mark.asyncio
+    async def test_no_query_returns_all(self, store):
+        with patch.object(store, '_get_session', return_value=None):
+            store._fallback.add_memory("user1", "fact", "Fact A")
+            store._fallback.add_memory("user1", "fact", "Fact B")
+
+            result = await store.format_memories_for_prompt_async("user1")
+            assert "Fact A" in result
+            assert "Fact B" in result

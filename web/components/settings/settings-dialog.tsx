@@ -4,6 +4,7 @@ import { useEffect, useCallback, type ComponentType } from "react";
 import { useTranslations } from "next-intl";
 import { X, Settings, Cpu, Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import {
   useSettingsDialogStore,
   type SettingsSection,
@@ -83,17 +84,14 @@ export function SettingsDialog() {
           <h1 className="text-lg font-semibold text-foreground">
             {t("title")}
           </h1>
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={closeSettings}
-            className={cn(
-              "w-8 h-8 rounded-lg flex items-center justify-center",
-              "text-muted-foreground hover:text-foreground hover:bg-secondary",
-              "transition-colors cursor-pointer",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            )}
+            className="w-8 h-8 text-muted-foreground hover:text-foreground"
           >
             <X className="w-4 h-4" />
-          </button>
+          </Button>
         </div>
 
         {/* Body: nav + content */}
@@ -101,14 +99,12 @@ export function SettingsDialog() {
           {/* Left nav - hidden on mobile, replaced by tabs */}
           <nav className="hidden md:flex flex-col w-44 shrink-0 border-r border-border py-3 px-2 gap-0.5">
             {SECTIONS.map(({ id, icon: Icon }) => (
-              <button
+              <Button
                 key={id}
+                variant="ghost"
                 onClick={() => setActiveSection(id)}
                 className={cn(
-                  "w-full h-9 px-3 rounded-sm flex items-center gap-2.5",
-                  "text-sm transition-colors",
-                  "cursor-pointer",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                  "w-full h-9 px-3 justify-start gap-2.5",
                   activeSection === id
                     ? "bg-secondary text-foreground font-medium"
                     : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
@@ -116,21 +112,19 @@ export function SettingsDialog() {
               >
                 <Icon className="w-4 h-4 shrink-0" />
                 <span>{t(`sections.${id}`)}</span>
-              </button>
+              </Button>
             ))}
           </nav>
 
           {/* Mobile tabs */}
           <div className="md:hidden flex border-b border-border px-4 pt-2 gap-1 w-full">
             {SECTIONS.map(({ id, icon: Icon }) => (
-              <button
+              <Button
                 key={id}
+                variant="ghost"
                 onClick={() => setActiveSection(id)}
                 className={cn(
-                  "flex-1 h-9 rounded-sm flex items-center justify-center gap-1.5",
-                  "text-xs transition-colors",
-                  "cursor-pointer",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                  "flex-1 h-9 text-xs gap-1.5",
                   activeSection === id
                     ? "bg-secondary text-foreground font-medium"
                     : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
@@ -138,7 +132,7 @@ export function SettingsDialog() {
               >
                 <Icon className="w-3.5 h-3.5 shrink-0" />
                 <span>{t(`sections.${id}`)}</span>
-              </button>
+              </Button>
             ))}
           </div>
 

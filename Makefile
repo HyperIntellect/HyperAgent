@@ -130,7 +130,7 @@ eval-quality: ## Run response quality evaluations
 
 eval-langsmith: ## Run evals with LangSmith tracking
 	@echo "$(CYAN)Running evaluations with LangSmith...$(RESET)"
-	cd backend && LANGCHAIN_TRACING_V2=true uv run pytest evals/ -v -m langsmith
+	cd backend && LANGCHAIN_TRACING_V2=true uv run pytest evals/ -v -m langsmith_integration
 
 eval-reliability: ## Generate reliability report from run ledger
 	@echo "$(CYAN)Generating reliability report...$(RESET)"

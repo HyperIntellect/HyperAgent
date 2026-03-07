@@ -2,11 +2,16 @@
 
 import { useEffect } from "react";
 import { useTranslations } from "next-intl";
-import { Cpu, Sparkles } from "lucide-react";
+import { Zap, Sparkles, Crown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { useSettingsStore } from "@/lib/stores/settings-store";
 
-const TIERS = ["max", "pro", "lite"] as const;
+const TIER_CONFIG = [
+  { id: "max" as const, icon: Crown },
+  { id: "pro" as const, icon: Sparkles },
+  { id: "lite" as const, icon: Zap },
+] as const;
 
 export function ModelSection() {
   const t = useTranslations("settings");
@@ -45,22 +50,19 @@ export function ModelSection() {
           </label>
           <div className="flex flex-wrap gap-2">
             {availableProviders.map((p) => (
-              <button
+              <Button
                 key={p.id}
+                variant="ghost"
                 onClick={() => setProvider(p.id)}
                 className={cn(
-                  "flex-1 min-w-0 h-10 px-3 rounded-lg flex items-center justify-center gap-2",
-                  "text-sm font-medium transition-colors",
-                  "cursor-pointer",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                  "flex-1 min-w-0 h-10",
                   provider === p.id
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-secondary text-muted-foreground hover:text-foreground"
+                    ? "bg-secondary text-foreground border border-foreground/15 font-medium"
+                    : "bg-secondary/50 text-muted-foreground hover:text-foreground hover:bg-secondary"
                 )}
               >
-                <Cpu className="w-4 h-4 shrink-0" />
                 <span className="truncate">{p.name}</span>
-              </button>
+              </Button>
             ))}
           </div>
         </div>
@@ -72,28 +74,26 @@ export function ModelSection() {
           {t("model.tier")}
         </label>
         <div className="space-y-2">
-          {TIERS.map((t_tier) => (
-            <button
+          {TIER_CONFIG.map(({ id: t_tier, icon: TierIcon }) => (
+            <Button
               key={t_tier}
+              variant="ghost"
               onClick={() => setTier(t_tier)}
               className={cn(
-                "w-full h-auto px-4 py-3 rounded-lg flex items-start gap-3 text-left",
-                "transition-colors",
-                "cursor-pointer",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                "w-full h-auto px-4 py-3 justify-start gap-3 text-left",
                 tier === t_tier
                   ? "bg-primary text-primary-foreground"
-                  : "bg-secondary text-muted-foreground hover:text-foreground"
+                  : "bg-secondary/50 text-muted-foreground hover:text-foreground hover:bg-secondary"
               )}
             >
-              <Sparkles className="w-4 h-4 shrink-0 mt-0.5" />
+              <TierIcon className="w-4 h-4 shrink-0 mt-0.5" />
               <div className="min-w-0">
                 <div className="text-sm font-medium">
                   {t_tier.charAt(0).toUpperCase() + t_tier.slice(1)}
                 </div>
                 <div
                   className={cn(
-                    "text-xs mt-0.5",
+                    "text-xs mt-0.5 font-normal",
                     tier === t_tier
                       ? "text-primary-foreground/70"
                       : "text-muted-foreground"
@@ -103,7 +103,7 @@ export function ModelSection() {
                     "model.tierMax" | "model.tierPro" | "model.tierLite")}
                 </div>
               </div>
-            </button>
+            </Button>
           ))}
         </div>
       </div>

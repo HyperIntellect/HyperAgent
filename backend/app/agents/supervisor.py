@@ -1,6 +1,12 @@
-"""Supervisor/orchestrator for the multi-agent system with handoff support."""
+"""Supervisor/orchestrator for the multi-agent system with handoff support.
+
+.. deprecated::
+    This module is deprecated. Use ``app.agents.orchestrator`` instead.
+    Kept for backward compatibility.
+"""
 
 import asyncio
+import time as _time
 import uuid
 from typing import Any, AsyncGenerator, Literal
 
@@ -16,7 +22,11 @@ from app.agents.state import (
     SupervisorState,
     TaskOutput,
 )
-from app.agents.subagents.task import task_subgraph
+from app.agents.budget import (
+    apply_budget_pressure_defaults,
+    derive_budget_pressure_state,
+)
+from app.agents.executor import executor_subgraph as task_subgraph
 from app.agents.tools.handoff import (
     HANDOFF_MATRIX,
     MAX_HANDOFFS,
@@ -32,11 +42,6 @@ logger = get_logger(__name__)
 
 # Default timeout for subgraph invocations (in seconds)
 DEFAULT_SUBGRAPH_TIMEOUT = 300  # 5 minutes
-
-# Streaming configuration - declarative mapping of which nodes should stream tokens
-# Note: "generate" is disabled because it produces code that shouldn't be shown to users
-# The code is still executed, and results are shown via "summarize" stage
-
 
 
 async def router_node(state: SupervisorState) -> RouterOutput:
@@ -216,6 +221,7 @@ async def task_node(state: SupervisorState, config: dict | None = None) -> TaskO
             "task_id": state.get("task_id"),
             "attachment_ids": state.get("attachment_ids") or [],
             "image_attachments": state.get("image_attachments") or [],
+            "attachment_context": state.get("attachment_context"),
             "system_prompt": state.get("system_prompt"),
             "provider": state.get("provider"),
             "model": state.get("model"),
@@ -512,8 +518,6 @@ class AgentSupervisor:
                           in run()/invoke() to avoid unbounded memory growth.
         """
         self._checkpointer_factory = checkpointer
-        # Pre-compile the graph structure (without checkpointer) for reuse
-        self._graph_no_cp = create_supervisor_graph(checkpointer=None)
 
     def _create_graph(self):
         """Create a graph with a fresh checkpointer per request.
@@ -561,7 +565,7 @@ class AgentSupervisor:
         requested_tier = kwargs.get("tier")
         requested_depth = kwargs.get("depth", ResearchDepth.FAST)
         requested_budget = kwargs.get("budget") or {}
-        effective_tier, effective_depth, budget_adjustment = _apply_budget_pressure_defaults(
+        effective_tier, effective_depth, budget_adjustment = apply_budget_pressure_defaults(
             budget=requested_budget,
             mode=original_mode,
             tier=requested_tier,
@@ -652,10 +656,11 @@ class AgentSupervisor:
             run_id=effective_run_id,
         )
         budget = initial_state.get("budget") or {}
+        has_budget = bool(budget and any(budget.values()))
         budget_exhausted = False
 
-        import time as _time
         _run_start = _time.monotonic()
+        _budget_check_counter = 0
 
         try:
             # Stream events from the graph
@@ -670,32 +675,36 @@ class AgentSupervisor:
 
                 async for processed_event in processor.process_event(event):
                     yield processed_event
-                    usage_totals = usage_tracker.get_total_tokens()
-                    tool_calls_count = len(processor.emitted_tool_call_ids)
-                    elapsed_seconds = int(_time.monotonic() - _run_start)
-                    budget_state = _derive_budget_pressure_state(
-                        budget=budget,
-                        usage_totals=usage_totals,
-                        tool_calls_count=tool_calls_count,
-                        elapsed_seconds=elapsed_seconds,
-                    )
-                    if budget_state["pressure_ratio"] >= 0.8 and budget_state["pressure_ratio"] < 1.0:
-                        yield {
-                            "type": "reasoning",
-                            "thinking": "Budget pressure rising; execution may degrade depth or stop soon.",
-                            "context": "budget",
-                            "budget_state": budget_state,
-                        }
-                    if budget_state["exhausted"]:
-                        budget_exhausted = True
-                        yield {
-                            "type": "stage",
-                            "name": "budget_stop",
-                            "description": "Execution stopped because run budget was exhausted.",
-                            "status": "completed",
-                            "budget_state": budget_state,
-                        }
-                        break
+                    # Throttle budget checks: only evaluate every 20 events
+                    if has_budget:
+                        _budget_check_counter += 1
+                        if _budget_check_counter % 20 == 0:
+                            usage_totals = usage_tracker.get_total_tokens()
+                            tool_calls_count = len(processor.emitted_tool_call_ids)
+                            elapsed_seconds = int(_time.monotonic() - _run_start)
+                            budget_state = derive_budget_pressure_state(
+                                budget=budget,
+                                usage_totals=usage_totals,
+                                tool_calls_count=tool_calls_count,
+                                elapsed_seconds=elapsed_seconds,
+                            )
+                            if 0.8 <= budget_state["pressure_ratio"] < 1.0:
+                                yield {
+                                    "type": "reasoning",
+                                    "thinking": "Budget pressure rising; execution may degrade depth or stop soon.",
+                                    "context": "budget",
+                                    "budget_state": budget_state,
+                                }
+                            if budget_state["exhausted"]:
+                                budget_exhausted = True
+                                yield {
+                                    "type": "stage",
+                                    "name": "budget_stop",
+                                    "description": "Execution stopped because run budget was exhausted.",
+                                    "status": "completed",
+                                    "budget_state": budget_state,
+                                }
+                                break
                 if budget_exhausted:
                     break
 
@@ -732,23 +741,11 @@ class AgentSupervisor:
             if user_id and messages and memory_enabled:
                 # Collect episodic context from the run
                 _duration_s = round(_time.monotonic() - _run_start, 1)
-                _tools_used = sorted({
-                    info.get("tool", "")
-                    for info in processor.pending_tool_calls.values()
-                    if info.get("tool")
-                } | {
-                    info.get("tool", "")
-                    for info in getattr(processor, "_completed_tools", [])
-                    if info.get("tool")
-                })
-                # Also collect from emitted_tool_call_ids tracking
-                _tool_names_from_calls = set()
-                for _tc_id, _tc_info in processor.pending_tool_calls.items():
-                    if _tc_info.get("tool"):
-                        _tool_names_from_calls.add(_tc_info["tool"])
-                for _tool_list in processor.pending_tool_calls_by_tool.keys():
-                    _tool_names_from_calls.add(_tool_list)
-                _tools_used = sorted(_tool_names_from_calls | set(_tools_used))
+                _tools_used = sorted(
+                    {info.get("tool", "") for info in processor.pending_tool_calls.values() if info.get("tool")}
+                    | set(processor.pending_tool_calls_by_tool.keys())
+                    | {info.get("tool", "") for info in getattr(processor, "_completed_tools", []) if info.get("tool")}
+                )
 
                 episodic_context = {
                     "task_description": query[:500],
@@ -841,90 +838,3 @@ class AgentSupervisor:
 
 # Global instance for convenience
 agent_supervisor = AgentSupervisor()
-def _derive_budget_pressure_state(
-    budget: dict[str, Any],
-    usage_totals: dict[str, Any],
-    tool_calls_count: int,
-    elapsed_seconds: int,
-) -> dict[str, Any]:
-    """Compute normalized budget pressure signals for runtime reporting."""
-    max_tokens = int(budget.get("max_tokens", 0) or 0)
-    max_cost = float(budget.get("max_cost_usd", 0.0) or 0.0)
-    max_tool_calls = int(budget.get("max_tool_calls", 0) or 0)
-    max_wall_clock = int(budget.get("max_wall_clock_seconds", 0) or 0)
-
-    token_ratio = (usage_totals.get("total_tokens", 0) / max_tokens) if max_tokens else 0.0
-    cost_ratio = (usage_totals.get("cost_usd", 0.0) / max_cost) if max_cost else 0.0
-    tool_ratio = (tool_calls_count / max_tool_calls) if max_tool_calls else 0.0
-    wall_ratio = (elapsed_seconds / max_wall_clock) if max_wall_clock else 0.0
-    pressure_ratio = max(token_ratio, cost_ratio, tool_ratio, wall_ratio)
-
-    return {
-        "exhausted": pressure_ratio >= 1.0,
-        "pressure_ratio": round(pressure_ratio, 4),
-        "max_tokens": max_tokens,
-        "max_cost_usd": max_cost,
-        "max_tool_calls": max_tool_calls,
-        "max_wall_clock_seconds": max_wall_clock,
-        "total_tokens": usage_totals.get("total_tokens", 0),
-        "cost_usd": usage_totals.get("cost_usd", 0.0),
-        "tool_calls": tool_calls_count,
-        "elapsed_seconds": elapsed_seconds,
-    }
-
-
-def _apply_budget_pressure_defaults(
-    budget: dict[str, Any],
-    mode: str | None,
-    tier: Any,
-    depth: Any,
-) -> tuple[Any, Any, dict[str, Any] | None]:
-    """Downgrade tier/depth at run start when budgets are very constrained."""
-    if not budget:
-        return tier, depth, None
-
-    normalized_tier = str(tier.value if hasattr(tier, "value") else (tier or "pro")).lower()
-    max_tokens = int(budget.get("max_tokens", 0) or 0)
-    max_cost = float(budget.get("max_cost_usd", 0.0) or 0.0)
-    max_tool_calls = int(budget.get("max_tool_calls", 0) or 0)
-
-    target_tier = normalized_tier
-    reason = None
-    # Conservative thresholds to avoid unexpected quality drops.
-    if (
-        (max_cost and max_cost <= 0.05)
-        or (max_tokens and max_tokens <= 5_000)
-        or (max_tool_calls and max_tool_calls <= 6)
-    ):
-        if normalized_tier in {"max", "pro"}:
-            target_tier = "lite"
-            reason = "strict_budget"
-    elif (
-        (max_cost and max_cost <= 0.25)
-        or (max_tokens and max_tokens <= 20_000)
-        or (max_tool_calls and max_tool_calls <= 16)
-    ):
-        if normalized_tier == "max":
-            target_tier = "pro"
-            reason = "budget_pressure"
-
-    target_depth = depth
-    if str(mode or "").lower() == "research":
-        if reason == "strict_budget":
-            target_depth = ResearchDepth.FAST
-
-    if target_tier != normalized_tier or target_depth != depth:
-        return (
-            target_tier,
-            target_depth,
-            {
-                "reason": reason or "budget_pressure",
-                "applied_tier": target_tier,
-                "applied_depth": str(target_depth.value if hasattr(target_depth, "value") else target_depth),
-                "original_tier": normalized_tier,
-                "original_depth": str(depth.value if hasattr(depth, "value") else depth) if depth else None,
-            },
-        )
-
-    # Normalize tier to string for consistent return type
-    return normalized_tier, depth, None

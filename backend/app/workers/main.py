@@ -8,6 +8,8 @@ Or: arq app.workers.main.WorkerSettings
 import random
 from typing import Any
 
+from arq import cron
+
 from app.config import settings
 from app.core.logging import get_logger, setup_logging
 from app.workers.config import get_redis_settings
@@ -76,6 +78,36 @@ async def shutdown(ctx: dict) -> None:
     logger.info("worker_stopped")
 
 
+async def cleanup_stale_tasks(ctx: dict) -> int:
+    """Mark tasks stuck in 'running' beyond job_timeout as failed."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import update
+
+    from app.db.base import async_session_maker
+    from app.db.models import ResearchTask
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=WorkerSettings.job_timeout)
+
+    async with async_session_maker() as db:
+        result = await db.execute(
+            update(ResearchTask)
+            .where(
+                ResearchTask.status == "running",
+                ResearchTask.started_at < cutoff,
+            )
+            .values(
+                status="failed",
+                error="Task timed out (stale task cleanup)",
+            )
+        )
+        await db.commit()
+        count = result.rowcount
+        if count > 0:
+            logger.info("stale_tasks_cleaned", count=count)
+        return count
+
+
 class WorkerSettings:
     """ARQ Worker Settings - loaded by arq CLI."""
 
@@ -87,10 +119,10 @@ class WorkerSettings:
         run_research_task,
     ]
 
-    # Scheduled/cron jobs (uncomment when needed)
-    # cron_jobs = [
-    #     cron(cleanup_stale_tasks, hour=3, minute=0),
-    # ]
+    # Scheduled/cron jobs
+    cron_jobs = [
+        cron(cleanup_stale_tasks, hour={0, 6, 12, 18}),  # Run every 6 hours
+    ]
 
     # Lifecycle hooks
     on_startup = startup
@@ -104,8 +136,8 @@ class WorkerSettings:
     # Lower to 0.1s if near-real-time responsiveness is needed.
     poll_delay = 0.5  # Seconds between queue polls
 
-    # Worker name (for identification in logs and monitoring)
-    name = "hyperagent-worker"  # Set to custom name like "hyperagent-worker-1" if running multiple workers
+    # Worker name (customize per instance if running multiple workers)
+    name = "hyperagent-worker"
 
     # Retry settings with exponential backoff
     max_tries = 3

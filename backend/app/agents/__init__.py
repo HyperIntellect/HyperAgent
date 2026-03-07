@@ -1,63 +1,36 @@
 """Multi-agent system with LangGraph-based orchestration.
 
-This module provides a supervisor-based architecture where the task agent
-handles all types of queries, using skills for specialized capabilities.
+Architecture: Orchestrator + PlannerAgent + ExecutorAgent.
 
-Available skills (invoked by task agent):
-- deep_research: Deep research with web search and analysis
-- data_analysis: Full data analysis with planning, code execution, summarization
-- image_generation: AI image generation
-- app_builder: Build web apps with live preview
-- slide_generation: Create PPTX presentations
-- code_generation: Generate code snippets
-- web_research: Focused web research with summarization
+The Orchestrator classifies queries (simple/complex), invokes PlannerAgent
+for complex tasks, dispatches ExecutorAgent per step, verifies results, and
+produces final responses. Simple queries go directly to ExecutorAgent.
 
 Usage:
-    from app.agents import agent_supervisor
+    from app.agents import agent_orchestrator
 
     # Streaming execution
-    async for event in agent_supervisor.run(query="Hello"):
+    async for event in agent_orchestrator.run(query="Hello"):
         print(event)
 
     # Non-streaming execution
-    result = await agent_supervisor.invoke(query="Hello")
+    result = await agent_orchestrator.invoke(query="Hello")
+
+    # Backward-compatible alias
+    from app.agents import agent_supervisor  # same as agent_orchestrator
 """
 
-# State definitions
-# Routing
-from app.agents.routing import RoutingResult, route_query
-from app.agents.state import (
-    AgentType,
-    ResearchState,
-    SupervisorState,
-    TaskState,
+# Orchestrator (canonical entry point)
+from app.agents.orchestrator import (
+    AgentOrchestrator,
+    agent_orchestrator,
 )
 
-# Subagents
-from app.agents.subagents import (
-    task_subgraph,
-)
-
-# Supervisor
-from app.agents.supervisor import (
-    AgentSupervisor,
-    agent_supervisor,
-    create_supervisor_graph,
-)
+# Backward-compat alias: agent_supervisor points to the orchestrator
+agent_supervisor = agent_orchestrator
 
 __all__ = [
-    # State types
-    "AgentType",
-    "SupervisorState",
-    "TaskState",
-    "ResearchState",
-    # Routing
-    "route_query",
-    "RoutingResult",
-    # Supervisor
-    "AgentSupervisor",
+    "AgentOrchestrator",
+    "agent_orchestrator",
     "agent_supervisor",
-    "create_supervisor_graph",
-    # Subagents
-    "task_subgraph",
 ]

@@ -195,6 +195,8 @@
             "researching": "Researching...",
             "handoffTo": "Delegating to {target}...",
             "skillCompleted": "Skill completed: {skill}",
+            "planning": "Planning ({steps} steps)...",
+            "executingStep": "Step {step}/{total}: {action}",
             "inProgress": "In progress",
             "completed": "Completed",
             "completedWithErrors": "Completed with errors",

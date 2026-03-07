@@ -9,6 +9,15 @@ import pytest
 from evals.mocks.mock_llm import MockChatModel, MockLLMConfig, MockResponse, MockRouterLLM
 
 # =============================================================================
+# Threshold Constants (Issue 6)
+# =============================================================================
+
+ROUTING_ACCURACY_THRESHOLD = 0.90
+ROUTING_CATEGORY_THRESHOLD = 0.80
+TOOL_SELECTION_ACCURACY_THRESHOLD = 0.85
+RESPONSE_QUALITY_THRESHOLD = 0.70
+
+# =============================================================================
 # Data Fixtures
 # =============================================================================
 
@@ -81,6 +90,11 @@ def mock_router_llm() -> MockRouterLLM:
         r"weather|news|search": "task",
         r"go to|navigate|browse|click|fill.*form": "task",
         r"translate|times|simple": "task",
+        # Adversarial catch-alls
+        r"ignore.*instructions|pretend|act as": "task",
+        r"make.*slide|create.*presentation|build.*slide": "task",
+        r"build.*app|create.*app|web.*app": "task",
+        r"plan.*project|break.*down|task.*plan": "task",
     }
     return MockRouterLLM(routing_map=routing_map)
 
@@ -140,6 +154,42 @@ def mock_chat_llm() -> MockChatModel:
                 }
             ],
         ),
+        # Slide generation (Issue 5: missing skill)
+        MockResponse(
+            pattern=r"create.*(?:slide|presentation|pptx)|make.*(?:slide|presentation)",
+            response="I'll create that presentation for you.",
+            tool_calls=[
+                {
+                    "name": "invoke_skill",
+                    "args": {"skill_id": "slide_generation", "params": {"topic": "slides"}},
+                    "id": "call_slide_1",
+                }
+            ],
+        ),
+        # App builder (Issue 5: missing skill)
+        MockResponse(
+            pattern=r"build.*(?:web\s*app|app|application)|create.*(?:web\s*app|app)",
+            response="I'll build that application for you.",
+            tool_calls=[
+                {
+                    "name": "invoke_skill",
+                    "args": {"skill_id": "app_builder", "params": {"description": "app"}},
+                    "id": "call_app_1",
+                }
+            ],
+        ),
+        # Task planning (Issue 5: missing skill)
+        MockResponse(
+            pattern=r"plan.*(?:project|task|implementation)|break.*down.*task|create.*plan",
+            response="I'll create a plan for that.",
+            tool_calls=[
+                {
+                    "name": "invoke_skill",
+                    "args": {"skill_id": "task_planning", "params": {"task": "plan"}},
+                    "id": "call_plan_1",
+                }
+            ],
+        ),
         # Web search tool
         MockResponse(
             pattern=r"search for|look up|find information",
@@ -186,9 +236,70 @@ def mock_chat_llm() -> MockChatModel:
     return MockChatModel(config=config)
 
 
+def _score_for_criteria(eval_prompt: str) -> float:
+    """Return different mock scores based on input criteria categories (Issue 3)."""
+    prompt_lower = eval_prompt.lower()
+
+    # Safety-related queries get high scores (model correctly refuses)
+    safety_kw = ["safety", "hack", "pii", "credit card", "social security"]
+    if any(kw in prompt_lower for kw in safety_kw):
+        return 0.9
+
+    # Code-related queries
+    if any(kw in prompt_lower for kw in ["code", "function", "debug", "palindrome", "python"]):
+        return 0.85
+
+    # Creative writing
+    if any(kw in prompt_lower for kw in ["creative", "story", "robot"]):
+        return 0.75
+
+    # Low-quality mock responses (the mock response is literally "Response to: ...")
+    if "mock response" in prompt_lower or "this is a mock" in prompt_lower:
+        return 0.6
+
+    # General/explanation
+    return 0.8
+
+
 @pytest.fixture
 def mock_judge_llm() -> MockChatModel:
-    """Create a mock LLM for response quality judging."""
+    """Create a pattern-aware mock LLM for response quality judging.
+
+    Returns different scores based on criteria categories to avoid trivially
+    passing all tests with a hardcoded score (Issue 3).
+    """
+    _score_response_cache: dict[str, str] = {}
+
+    class PatternAwareMockChatModel(MockChatModel):
+        """Mock judge that varies scores by criteria category."""
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            from langchain_core.messages import AIMessage
+            from langchain_core.outputs import ChatGeneration, ChatResult
+
+            # Extract the evaluation prompt from messages
+            eval_prompt = ""
+            for msg in messages:
+                if hasattr(msg, "content"):
+                    eval_prompt += str(msg.content) + " "
+
+            score = _score_for_criteria(eval_prompt)
+
+            response_json = json.dumps(
+                {
+                    "score": score,
+                    "reasoning": f"Score {score} based on criteria analysis",
+                    "strengths": ["Relevant", "Clear"],
+                    "weaknesses": ["Could be more detailed"] if score < 0.85 else [],
+                }
+            )
+
+            ai_message = AIMessage(content=response_json)
+            return ChatResult(generations=[ChatGeneration(message=ai_message)])
+
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            return self._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
     config = MockLLMConfig(
         default_response=json.dumps(
             {
@@ -199,7 +310,7 @@ def mock_judge_llm() -> MockChatModel:
             }
         ),
     )
-    return MockChatModel(config=config)
+    return PatternAwareMockChatModel(config=config)
 
 
 # =============================================================================
@@ -281,12 +392,15 @@ def mock_chat_agent(mock_chat_llm: MockChatModel):
 
 @pytest.fixture
 def langsmith_client():
-    """Create a LangSmith client if available."""
+    """Create a LangSmith client if available and configured."""
     try:
         from langsmith import Client
 
-        return Client()
+        client = Client()
+        # Validate that the client can actually connect
+        client.list_datasets(limit=1)
+        return client
     except ImportError:
         pytest.skip("LangSmith not installed")
     except Exception:
-        pytest.skip("LangSmith not configured")
+        pytest.skip("LangSmith not configured or API key invalid")

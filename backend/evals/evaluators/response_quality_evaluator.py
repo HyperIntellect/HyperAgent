@@ -1,20 +1,10 @@
 """Response quality evaluator using LLM-as-judge pattern."""
 
-from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-
-@dataclass
-class EvaluationResult:
-    """Result of an evaluation."""
-
-    key: str
-    score: float
-    comment: str | None = None
-    metadata: dict[str, Any] | None = None
-
+from evals.evaluators.base import EvaluationResult
 
 # System prompt for the LLM judge
 JUDGE_SYSTEM_PROMPT = """You are an expert evaluator assessing AI assistant responses.
@@ -162,6 +152,8 @@ Evaluate the response quality."""
     ) -> EvaluationResult:
         """Evaluate response quality synchronously.
 
+        Works safely whether or not an event loop is already running.
+
         Args:
             query: The original user query
             response: The AI response to evaluate
@@ -170,9 +162,7 @@ Evaluate the response quality."""
         Returns:
             EvaluationResult with quality score
         """
-        import asyncio
-
-        return asyncio.run(self.evaluate_async(query, response, criteria))
+        return _run_async(self.evaluate_async(query, response, criteria))
 
     async def evaluate_batch_async(
         self,
@@ -229,6 +219,24 @@ Evaluate the response quality."""
         }
 
 
+def _run_async(coro):
+    """Run an async coroutine synchronously, safe even inside a running event loop."""
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop — safe to use asyncio.run()
+        return asyncio.run(coro)
+
+    # Already inside a running loop — run in a separate thread
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, coro)
+        return future.result()
+
+
 def response_quality_evaluator(
     run: Any,
     example: Any,
@@ -242,11 +250,9 @@ def response_quality_evaluator(
     Returns:
         EvaluationResult for LangSmith
     """
-    import asyncio
-
     query = example.inputs.get("query", "")
     response = run.outputs.get("response", "")
     criteria = example.outputs.get("criteria", {})
 
     evaluator = ResponseQualityEvaluator()
-    return asyncio.run(evaluator.evaluate_async(query, response, criteria))
+    return _run_async(evaluator.evaluate_async(query, response, criteria))

@@ -78,7 +78,7 @@ def _invalidate_cached_agent_tools() -> None:
     those caches must be cleared so new tools become visible without restart.
     """
     invalidators = [
-        ("app.agents.subagents.task", "clear_tool_cache"),
+        ("app.agents.react_helpers", "clear_tool_cache"),
         ("app.agents.skills.builtin.deep_research_skill", "_clear_tool_cache"),
     ]
     for module_path, fn_name in invalidators:

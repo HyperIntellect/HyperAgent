@@ -12,6 +12,8 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/lib/stores/settings-store";
 
 interface Memory {
@@ -171,23 +173,10 @@ export function MemorySection() {
         <span className="text-sm text-foreground">
           {t("memory.enableToggle")}
         </span>
-        <button
-          role="switch"
-          aria-checked={memoryEnabled}
-          onClick={() => setMemoryEnabled(!memoryEnabled)}
-          className={cn(
-            "relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors cursor-pointer",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-            memoryEnabled ? "bg-primary" : "bg-secondary"
-          )}
-        >
-          <span
-            className={cn(
-              "pointer-events-none block h-4 w-4 rounded-full bg-white shadow-sm transition-transform mt-0.5",
-              memoryEnabled ? "translate-x-[18px]" : "translate-x-0.5"
-            )}
-          />
-        </button>
+        <Switch
+          checked={memoryEnabled}
+          onCheckedChange={setMemoryEnabled}
+        />
       </label>
 
       {/* Error banner */}
@@ -195,61 +184,56 @@ export function MemorySection() {
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 text-destructive text-sm">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{error}</span>
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setError(null)}
-            className="ml-auto p-0.5 hover:bg-destructive/20 rounded cursor-pointer"
+            className="ml-auto h-6 w-6 p-0 hover:bg-destructive/20 text-destructive"
           >
             <X className="w-3.5 h-3.5" />
-          </button>
+          </Button>
         </div>
       )}
 
       {/* Type filter */}
       <div className="flex flex-wrap gap-2">
         {Object.entries(TYPE_FILTER_KEYS).map(([key, tKey]) => (
-          <button
+          <Button
             key={key}
+            variant="ghost"
+            size="sm"
             onClick={() => setFilter(key)}
             className={cn(
-              "h-8 px-3 rounded-lg text-sm font-medium transition-colors cursor-pointer",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
               filter === key
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-muted-foreground hover:text-foreground"
+                ? "bg-secondary text-foreground border border-foreground/15 font-medium"
+                : "bg-secondary/50 text-muted-foreground hover:text-foreground hover:bg-secondary"
             )}
           >
             {t(`memory.${tKey}` as `memory.${string}`)}
-          </button>
+          </Button>
         ))}
       </div>
 
       {/* Actions bar */}
       <div className="flex items-center gap-2">
-        <button
+        <Button
+          variant="default"
+          size="sm"
           onClick={() => setShowAddForm((v) => !v)}
-          className={cn(
-            "h-8 px-3 rounded-lg text-sm font-medium transition-colors cursor-pointer",
-            "flex items-center gap-1.5",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-            "bg-secondary text-muted-foreground hover:text-foreground"
-          )}
         >
           <Plus className="w-3.5 h-3.5" />
           {t("memory.addMemory")}
-        </button>
+        </Button>
         {memories.length > 0 && (
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setShowClearConfirm(true)}
-            className={cn(
-              "h-8 px-3 rounded-lg text-sm font-medium transition-colors cursor-pointer",
-              "flex items-center gap-1.5 ml-auto",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-              "text-destructive hover:bg-destructive/10"
-            )}
+            className="ml-auto text-destructive hover:bg-destructive/10"
           >
             <Trash2 className="w-3.5 h-3.5" />
             {t("memory.clearAll")}
-          </button>
+          </Button>
         )}
       </div>
 
@@ -259,18 +243,22 @@ export function MemorySection() {
           <span className="text-sm text-foreground flex-1">
             {t("memory.clearAllConfirm")}
           </span>
-          <button
+          <Button
+            variant="destructive"
+            size="sm"
             onClick={handleClearAll}
-            className="h-7 px-3 rounded-md text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90 cursor-pointer"
+            className="h-7 text-xs"
           >
             {t("memory.clearAllButton")}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setShowClearConfirm(false)}
-            className="h-7 px-2 rounded-md text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+            className="h-7 text-xs text-muted-foreground"
           >
             {t("memory.cancelEdit")}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -282,20 +270,21 @@ export function MemorySection() {
           </div>
           <div className="flex gap-2">
             {MEMORY_TYPES.map((mt) => (
-              <button
+              <Button
                 key={mt}
+                variant="ghost"
                 onClick={() => setNewType(mt)}
                 className={cn(
-                  "h-7 px-2.5 rounded-md text-xs font-medium transition-colors cursor-pointer",
+                  "h-7 px-2.5 text-xs",
                   newType === mt
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-secondary text-muted-foreground hover:text-foreground"
+                    ? "bg-secondary text-foreground border border-foreground/15 font-medium"
+                    : "bg-secondary/50 text-muted-foreground hover:text-foreground hover:bg-secondary"
                 )}
               >
                 {t(
                   `memory.${TYPE_FILTER_KEYS[mt]}` as `memory.${string}`
                 )}
-              </button>
+              </Button>
             ))}
           </div>
           <textarea
@@ -307,30 +296,29 @@ export function MemorySection() {
               "w-full px-3 py-2 rounded-lg text-sm resize-none",
               "bg-background border border-border",
               "text-foreground placeholder:text-muted-foreground",
-              "focus:outline-none focus:ring-2 focus:ring-primary"
+              "focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
             )}
           />
           <div className="flex justify-end gap-2">
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 setShowAddForm(false);
                 setNewContent("");
               }}
-              className="h-8 px-3 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground cursor-pointer"
+              className="text-muted-foreground"
             >
               {t("memory.cancelEdit")}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
               onClick={handleAdd}
               disabled={saving || !newContent.trim()}
-              className={cn(
-                "h-8 px-3 rounded-lg text-sm font-medium cursor-pointer",
-                "bg-primary text-primary-foreground hover:bg-primary/90",
-                "disabled:opacity-50 disabled:cursor-not-allowed"
-              )}
             >
               {t("memory.saveMemory")}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -378,23 +366,27 @@ export function MemorySection() {
                       "w-full px-3 py-2 rounded-lg text-sm resize-none",
                       "bg-secondary border border-border",
                       "text-foreground",
-                      "focus:outline-none focus:ring-2 focus:ring-primary"
+                      "focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
                     )}
                   />
                   <div className="flex justify-end gap-1.5">
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => setEditingId(null)}
-                      className="h-7 px-2 rounded-md text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                      className="h-7 w-7 text-muted-foreground"
                     >
                       <X className="w-3.5 h-3.5" />
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => handleUpdate(m.id)}
                       disabled={!editContent.trim()}
-                      className="h-7 px-2 rounded-md text-xs text-primary hover:bg-primary/10 cursor-pointer disabled:opacity-50"
+                      className="h-7 w-7 text-primary hover:bg-primary/10"
                     >
                       <Check className="w-3.5 h-3.5" />
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : (
@@ -420,23 +412,27 @@ export function MemorySection() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => {
                         setEditingId(m.id);
                         setEditContent(m.content);
                       }}
-                      className="h-7 w-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary cursor-pointer"
+                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
                       title={t("memory.editMemory")}
                     >
                       <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => handleDelete(m.id)}
-                      className="h-7 w-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                       title={t("memory.deleteMemory")}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}

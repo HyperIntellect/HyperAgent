@@ -2,12 +2,12 @@
 
 ## Overview
 
-HyperAgent uses a **hybrid architecture** with two agents and a composable skills system:
+HyperAgent uses a **3-component architecture** with an orchestrator, two specialized agents, and a composable skills system:
 
-- **Task Agent** — General-purpose agent with ReAct tool-calling loop. Handles ~80% of requests including chat, data analysis, app building, image generation, slide creation, and browser automation.
-- **Research Agent** — Specialized multi-step research with search, analysis, synthesis, and report writing.
-
-A supervisor routes queries and manages agent handoff.
+- **Orchestrator** — Classifies queries as simple or complex, invokes PlannerAgent for complex tasks, and dispatches ExecutorAgent per step.
+- **ExecutorAgent** — Self-contained ReAct loop for executing a single step or task. Extracted from the old Task Agent. Handles ~80% of requests including chat, data analysis, app building, image generation, slide creation, and browser automation.
+- **PlannerAgent** — Decomposes complex queries into a structured list of steps for the Orchestrator to dispatch.
+- **Research Agent** — Specialized multi-step research with search, analysis, synthesis, and report writing (unchanged).
 
 ## Core Philosophy
 
@@ -23,26 +23,44 @@ A supervisor routes queries and manages agent handoff.
 └───────────────┬──────────────────┘
                 │
          ┌──────▼──────┐
-         │  Supervisor  │
-         │   (Router)   │
+         │ Orchestrator │
+         │  (classify)  │
          └──────┬───────┘
                 │
-      ┌─────────┴─────────┐
-      │                    │
-  Most Tasks         Deep Research
-      │                    │
-      ▼                    ▼
-┌───────────┐       ┌───────────┐
-│   TASK    │       │ RESEARCH  │
-│   Agent   │       │   Agent   │
-│           │       │           │
-│ ReAct loop│  ───► │ search →  │
-│ + tools   │ hand  │ analyze → │
-│ + skills  │  off  │ synthesize│
-└─────┬─────┘       │ → write   │
-      │              └───────────┘
-      │ invoke_skill
-      ▼
+      ┌─────────┼──────────────┐
+      │         │              │
+   simple    complex     research mode
+      │         │              │
+      │    ┌────▼─────┐        │
+      │    │ Planner  │        │
+      │    │  Agent   │        │
+      │    └────┬─────┘        │
+      │         │ steps        │
+      │    ┌────▼─────┐        │
+      │    │ Executor │        │
+      ▼    │ (per step)│       ▼
+┌───────────┐  │       ┌───────────┐
+│ EXECUTOR  │◄─┘       │ RESEARCH  │
+│   Agent   │          │   Agent   │
+│           │          │           │
+│ ReAct loop│   ────►  │ search →  │
+│ + tools   │  hand    │ analyze → │
+│ + skills  │   off    │ synthesize│
+└─────┬─────┘          │ → write   │
+      │                └───────────┘
+      │         │
+      │    ┌────▼─────┐
+      │    │  verify   │
+      │    │ + re-plan │
+      │    └────┬──────┘
+      │         │
+      └────┬────┘
+           │
+      ┌────▼─────┐
+      │ finalize  │
+      └────┬──────┘
+           │ invoke_skill
+           ▼
 ┌──────────────────────────┐
 │     Skills System        │
 ├──────────────────────────┤
@@ -58,41 +76,58 @@ A supervisor routes queries and manages agent handoff.
 
 ## Routing
 
-The supervisor uses LLM-based routing to select the appropriate agent. Explicit mode overrides (app, image, slide, data) skip LLM routing and go directly to the Task agent.
+**File:** `backend/app/agents/classifier.py`
+
+The Orchestrator uses **heuristic-based classification** (no LLM call) to determine query complexity and routing:
 
 ```
-Is it deep research (10+ sources, detailed report)?
-  YES → RESEARCH Agent
-  NO  → TASK Agent (uses skills/tools as needed)
+Is it research mode?
+  YES → Research Agent
+Is it a dedicated mode (app, image, slide, data)?
+  YES → simple → ExecutorAgent (direct skill invocation)
+Is the query short / single-step?
+  YES → simple → ExecutorAgent
+Does the query contain multi-step patterns or complexity keywords?
+  YES → complex → PlannerAgent → ExecutorAgent (per step)
+Default → simple → ExecutorAgent
 ```
+
+### Classification Heuristics
+
+- **Dedicated modes** (app, image, slide, data) → always classified as `simple`
+- **Short queries** (few tokens, single sentence) → `simple`
+- **Multi-step patterns** (e.g., "first... then...", "step 1... step 2...") → `complex`
+- **Complexity keywords** (e.g., "analyze and compare", "build a pipeline") → `complex`
 
 ### Mode-to-Agent Mapping
 
 | Mode | Agent | Notes |
 |------|-------|-------|
-| `task` (default) | Task | General chat, Q&A |
+| `task` (default) | ExecutorAgent | General chat, Q&A |
 | `research` | Research | Deep multi-source research |
-| `data` | Task | Data analysis via code execution |
-| `app` | Task | Direct skill invocation → `app_builder` |
-| `image` | Task | Direct skill invocation → `image_generation` |
-| `slide` | Task | Direct skill invocation → `slide_generation` |
+| `data` | ExecutorAgent | Data analysis via code execution |
+| `app` | ExecutorAgent | Direct skill invocation → `app_builder` |
+| `image` | ExecutorAgent | Direct skill invocation → `image_generation` |
+| `slide` | ExecutorAgent | Direct skill invocation → `slide_generation` |
 
-For dedicated modes (app, image, slide), the Task agent bypasses LLM reasoning and directly synthesizes an `invoke_skill` tool call on the first iteration.
+For dedicated modes (app, image, slide), the ExecutorAgent bypasses LLM reasoning and directly synthesizes an `invoke_skill` tool call on the first iteration.
 
-## Task Agent
+## ExecutorAgent
 
-**File:** `backend/app/agents/subagents/task.py`
+**File:** `backend/app/agents/executor.py`
+
+A self-contained ReAct loop for executing a single step or task. Extracted from the old Task Agent, the ExecutorAgent focuses purely on execution — plan tracking and verification have been moved to the Orchestrator.
 
 ### ReAct Loop
 
 ```
-reason_node → should_continue → act_node → should_wait_or_reason → reason_node → ... → finalize_node
+reason → act → wait_interrupt → reason → ... → complete
 ```
 
-- **reason_node**: LLM reasons about what to do, may emit tool calls
-- **act_node**: Executes tool calls (with HITL approval for high-risk tools)
-- **wait_interrupt_node**: Waits for user response to `ask_user` interrupts
-- **finalize_node**: Extracts final response from messages
+- **reason**: LLM reasons about what to do, may emit tool calls
+- **act**: Executes tool calls (with HITL approval for high-risk tools)
+- **wait_interrupt**: Waits for user response to `ask_user` interrupts
+- **complete**: Signals step/task completion, returns result to caller
 
 ### Available Tools
 
@@ -110,15 +145,6 @@ reason_node → should_continue → act_node → should_wait_or_reason → reaso
 | Handoff | `delegate_to_research` |
 | HITL | `ask_user` |
 
-### Todo File Persistence
-
-The Task agent maintains a persistent todo checklist in the sandbox filesystem at `/home/user/.hyperagent/todo.md`. This prevents goal drift across long tool-calling sequences (50+ iterations).
-
-- On plan creation: writes execution plan as markdown checklist to sandbox
-- Each iteration: reads current todo state and injects as `[Active Task Context]` system message (capped at 2000 chars)
-- On step completion: updates checklist items in sandbox file
-- Emits `todo_update` events for frontend rendering
-
 ### Anti-Repetition Detection
 
 Detects when the agent falls into repetitive tool-calling patterns (same error → same retry):
@@ -127,16 +153,6 @@ Detects when the agent falls into repetitive tool-calling patterns (same error �
 - Tracks consecutive identical hashes in `last_tool_calls_hash` state field
 - After 3+ consecutive identical batches, injects a variation prompt suggesting alternative approaches
 - Fires before the existing `plan_revision` mechanism (which triggers at 5 consecutive errors)
-
-### Planned Execution
-
-When the `task_planning` skill returns a plan, the Task agent enters planned execution mode:
-- Plan steps stored in `execution_plan` state
-- Step guidance injected before each LLM call
-- Progress events emitted as steps complete
-- `current_step_index` tracks position
-- Emits `plan_overview` event at start (with all steps) and `plan_step_completed` events as each step finishes
-- Frontend renders plan as interactive checklist with progress bar
 
 ### Context Compression
 
@@ -155,6 +171,29 @@ Messages are split into a "stable prefix" and "dynamic suffix" to maximize LLM K
 - `prefix_hash` in state tracks whether the prefix has changed; if unchanged, the LLM can reuse cached KV entries
 - Tool filtering uses "soft disable" (system message noting unavailable tools) instead of removing tool schemas, preserving prefix stability
 - Helpers: `get_stable_prefix()` and `get_dynamic_suffix()` in `context_compression.py`
+
+## PlannerAgent
+
+**File:** `backend/app/agents/planner.py`
+
+A single-node subgraph that decomposes complex queries into structured execution steps for the Orchestrator.
+
+### Input
+
+- User query
+- Conversation context
+- Optional `revision_context` (feedback from a failed verification, used for re-planning)
+
+### Output
+
+- `list[PlanStep]` — ordered list of steps, each with a description, expected outcome, and dependencies
+
+### Details
+
+- Uses **PRO tier** LLM for balanced quality and speed
+- Stateless: no persistent memory between invocations; re-planning uses explicit `revision_context`
+- Emits `plan_overview` event at plan creation (with all steps) for frontend rendering
+- Frontend renders plan as interactive checklist with progress bar
 
 ## Research Agent
 
@@ -203,23 +242,61 @@ Agents invoke skills via two tools:
 
 Skills can compose with each other via `SkillContext.invoke_skill()`.
 
-## Supervisor
+## Orchestrator
 
-**File:** `backend/app/agents/supervisor.py`
+**File:** `backend/app/agents/orchestrator.py`
 
-Orchestrates the multi-agent workflow:
+The `AgentOrchestrator` class is the main entry point for all agent workflows, replacing the old `AgentSupervisor`. It manages query classification, planning, step dispatch, verification, and finalization.
 
-1. **Routing**: LLM-based agent selection (or explicit mode override)
-2. **Agent Execution**: Invokes selected agent subgraph
-3. **Handoff**: Task agent can delegate to Research agent via `delegate_to_research` tool (max 3 handoffs). Handoffs can include `handoff_artifacts` — files transferred from the source sandbox to the target sandbox via storage (see Cross-Sandbox Handoff Artifacts).
-4. **Event Streaming**: Normalizes and deduplicates events from LangGraph via `StreamProcessor`
+### Graph Nodes
+
+```
+classify → plan (if complex) → dispatch_step → verify → finalize
+                                    ↑               │
+                                    └───────────────┘
+                                     (re-plan loop)
+```
+
+- **classify**: Heuristic-based classification (simple, complex, or research) — see Routing section
+- **plan**: Invokes PlannerAgent to decompose the query into steps
+- **dispatch_step**: Invokes ExecutorAgent for the current step, advances step index
+- **verify**: Checks step results; if unsatisfactory, re-invokes PlannerAgent with `revision_context` and loops back to dispatch
+- **finalize**: Aggregates results from all steps, extracts final response, streams completion events
+
+### Step Dispatch Loop
+
+For complex queries, the Orchestrator iterates through plan steps:
+
+1. PlannerAgent generates `list[PlanStep]`
+2. For each step, Orchestrator dispatches ExecutorAgent with step-specific context
+3. After all steps, Orchestrator runs verification
+4. If verification fails, re-plans with feedback and re-dispatches remaining steps
+5. Emits `plan_step_completed` and `todo_update` events as each step finishes
+
+### Todo File Persistence
+
+The Orchestrator maintains a persistent todo checklist in the sandbox filesystem at `/home/user/.hyperagent/todo.md`. This prevents goal drift across long multi-step executions.
+
+- On plan creation: writes execution plan as markdown checklist to sandbox
+- Each step dispatch: reads current todo state and injects as `[Active Task Context]` system message (capped at 2000 chars)
+- On step completion: updates checklist items in sandbox file
+- Emits `todo_update` events for frontend rendering
+
+### Handoff
+
+ExecutorAgent can delegate to Research agent via `delegate_to_research` tool (max 3 handoffs). Handoffs can include `handoff_artifacts` — files transferred from the source sandbox to the target sandbox via storage (see Cross-Sandbox Handoff Artifacts).
+
+### Event Streaming
+
+Normalizes and deduplicates events from LangGraph via `StreamProcessor`.
 
 ### State Hierarchy
 
 ```
-SupervisorState (base)
-├── TaskState (extends for tool calling, planned execution, HITL)
-└── ResearchState (extends for search/analysis/synthesis)
+OrchestratorState (main graph)
+├── PlannerState (planner subgraph)
+├── ExecutorState (executor subgraph, replaces TaskState)
+└── ResearchState (unchanged)
 ```
 
 ## LLM Provider System
@@ -374,7 +451,7 @@ When agents hand off work (Task → Research), files from the source sandbox can
 - `cleanup_artifacts(artifacts)` — remove transferred files from storage after completion
 - Default patterns: `*.py`, `*.csv`, `*.json`, `*.txt`, `*.md`, `*.html`, `*.js`, `*.ts`
 - `HandoffInfo` includes optional `handoff_artifacts` field
-- Supervisor restores artifacts and appends summary to handoff context
+- Orchestrator restores artifacts and appends summary to handoff context
 
 ## Hybrid CodeAct Mode
 
@@ -445,10 +522,16 @@ The `hyperagent` library (`backend/app/sandbox/hyperagent_lib/__init__.py`) is a
 
 ## Backward Compatibility
 
-Deprecated agent types are mapped to Task agent:
-- IMAGE → Task + `image_generation` skill
-- WRITING → Task (handled directly by LLM)
-- CODE → Task + `code_generation` skill
-- DATA → Task + `data_analysis` skill
-- APP → Task + `app_builder` skill
-- SLIDE → Task + `slide_generation` skill
+Deprecated agent types are mapped to ExecutorAgent:
+- IMAGE → ExecutorAgent + `image_generation` skill
+- WRITING → ExecutorAgent (handled directly by LLM)
+- CODE → ExecutorAgent + `code_generation` skill
+- DATA → ExecutorAgent + `data_analysis` skill
+- APP → ExecutorAgent + `app_builder` skill
+- SLIDE → ExecutorAgent + `slide_generation` skill
+
+### Deprecated Files
+
+The following files are deprecated but kept for backward compatibility. Imports are redirected to their replacements:
+- `backend/app/agents/supervisor.py` → use `backend/app/agents/orchestrator.py` (`AgentOrchestrator`)
+- `backend/app/agents/subagents/task.py` → use `backend/app/agents/executor.py` (`ExecutorAgent`)

@@ -2,6 +2,7 @@
 
 import pytest
 
+from evals.conftest import TOOL_SELECTION_ACCURACY_THRESHOLD
 from evals.evaluators.tool_selection_evaluator import ToolSelectionEvaluator
 
 
@@ -60,7 +61,10 @@ class TestToolSelection:
                 print(f"    Input: {f['input'][:60]}...")
 
         # Assert minimum accuracy threshold
-        assert accuracy >= 0.85, f"Tool selection accuracy {accuracy:.1%} < 85% threshold"
+        assert accuracy >= TOOL_SELECTION_ACCURACY_THRESHOLD, (
+            f"Tool selection accuracy {accuracy:.1%} "
+            f"< {TOOL_SELECTION_ACCURACY_THRESHOLD:.0%} threshold"
+        )
 
     @pytest.mark.asyncio
     async def test_tool_selection_by_category(self, tool_selection_cases, mock_chat_agent):
@@ -245,6 +249,7 @@ class TestSkillSelection:
 
         assert "code_generation" in skill_ids
 
+
 class TestToolSelectionEdgeCases:
     """Test edge cases for tool selection."""
 
@@ -262,10 +267,73 @@ class TestToolSelectionEdgeCases:
 
     @pytest.mark.asyncio
     async def test_multiple_tools_possible(self, mock_chat_agent):
-        """Query that could use multiple tools should pick one."""
+        """Query that could use multiple tools should pick at least one relevant tool."""
         result = await mock_chat_agent.process(
             "Create a chart showing the data from web search results"
         )
-        # Should pick at least one relevant tool
+        # Should pick at least one relevant tool (Issue 7: was >= 0 which is always true)
         tool_names = [tc["name"] for tc in result["tool_calls"]]
-        assert len(tool_names) >= 0  # May or may not use tools
+        assert len(tool_names) >= 1, "Expected at least one tool call for a multi-tool query"
+
+
+class TestToolSelectionLangSmith:
+    """LangSmith integration tests for tool selection (Issue 2)."""
+
+    @pytest.mark.langsmith_integration
+    def test_tool_selection_evaluator_function(self, langsmith_client):
+        """Test the LangSmith-compatible tool selection evaluator function."""
+        from evals.evaluators import tool_selection_evaluator
+
+        class MockRun:
+            def __init__(self, outputs):
+                self.outputs = outputs
+
+        class MockExample:
+            def __init__(self, inputs, outputs):
+                self.inputs = inputs
+                self.outputs = outputs
+
+        run = MockRun(
+            outputs={
+                "tool_calls": [
+                    {
+                        "name": "invoke_skill",
+                        "args": {"skill_id": "image_generation"},
+                        "id": "call_1",
+                    }
+                ]
+            }
+        )
+        example = MockExample(
+            inputs={"query": "Generate an image of a sunset"},
+            outputs={"expected_skill": "image_generation", "expected_tool": None},
+        )
+
+        result = tool_selection_evaluator(run, example)
+
+        assert result.score == 1.0
+        assert result.key == "tool_selection"
+
+    @pytest.mark.langsmith_integration
+    def test_tool_selection_evaluator_no_tools(self, langsmith_client):
+        """Test tool selection evaluator when no tools expected."""
+        from evals.evaluators import tool_selection_evaluator
+
+        class MockRun:
+            def __init__(self, outputs):
+                self.outputs = outputs
+
+        class MockExample:
+            def __init__(self, inputs, outputs):
+                self.inputs = inputs
+                self.outputs = outputs
+
+        run = MockRun(outputs={"tool_calls": []})
+        example = MockExample(
+            inputs={"query": "Hello"},
+            outputs={"expected_skill": None, "expected_tool": None},
+        )
+
+        result = tool_selection_evaluator(run, example)
+
+        assert result.score == 1.0

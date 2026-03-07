@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents import agent_supervisor
+from app.agents import agent_orchestrator as agent_supervisor
 from app.ai.model_tiers import ModelTier, resolve_model
 from app.api.query_helpers import (
     TASK_SYSTEM_PROMPT,
@@ -36,6 +36,10 @@ from app.services.run_ledger import run_ledger_service
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/query")
+_BLOCKED_INPUT_MESSAGE = (
+    "I'm unable to process this request due to safety concerns. "
+    "Please rephrase your message and try again."
+)
 
 
 @router.post("/", response_model=UnifiedQueryResponse)
@@ -52,11 +56,7 @@ async def query(
             request.attachment_ids,
             current_user.id,
         )
-
-        # Enhance system prompt with file context
         system_prompt = TASK_SYSTEM_PROMPT
-        if file_context:
-            system_prompt = f"{TASK_SYSTEM_PROMPT}\n\nThe user has attached the following files for context:\n\n{file_context}"
 
         history = [m.model_dump() for m in request.history]
         if not history and request.conversation_id:
@@ -70,6 +70,22 @@ async def query(
         # Resolve effective provider/model for responses (respects tier config)
         effective_provider, effective_model = resolve_model(ModelTier.PRO, provider=request.provider)
 
+        # Input guardrails check (must match streaming endpoint behavior)
+        scan_result = await input_scanner.scan(request.message)
+        if scan_result.blocked:
+            logger.warning(
+                "input_guardrail_blocked_non_stream",
+                violations=[v.value for v in scan_result.violations],
+                reason=scan_result.reason,
+            )
+            return UnifiedQueryResponse(
+                id=str(uuid.uuid4()),
+                mode=request.mode,
+                content=_BLOCKED_INPUT_MESSAGE,
+                model=request.model or effective_model,
+                provider=effective_provider,
+            )
+
         if request.mode == QueryMode.TASK:
             # Use agent supervisor even for chat to enable tools
             result = await agent_supervisor.invoke(
@@ -78,6 +94,7 @@ async def query(
                 user_id=current_user.id,
                 messages=history,
                 system_prompt=system_prompt,
+                attachment_context=file_context,
                 provider=request.provider,
                 model=request.model,
                 memory_enabled=request.memory_enabled,
@@ -99,6 +116,7 @@ async def query(
                 user_id=current_user.id,
                 messages=history,
                 system_prompt=system_prompt,
+                attachment_context=file_context,
                 provider=request.provider,
                 model=request.model,
                 memory_enabled=request.memory_enabled,
@@ -174,10 +192,7 @@ async def stream_query(
             has_history=bool(history),
         )
 
-        # Enhance system prompt with file context
         system_prompt = TASK_SYSTEM_PROMPT
-        if file_context:
-            system_prompt = f"{TASK_SYSTEM_PROMPT}\n\nThe user has attached the following files for context:\n\n{file_context}"
 
         # Generate task_id for browser session management if not provided
         # Use request.task_id, conversation_id as fallback, or generate a new one
@@ -195,8 +210,7 @@ async def stream_query(
 
             async def blocked_generator() -> AsyncGenerator[str, None]:
                 error_message = (
-                    "I'm unable to process this request due to safety concerns. "
-                    "Please rephrase your message and try again."
+                    _BLOCKED_INPUT_MESSAGE
                 )
                 yield _sse_data({"type": "token", "data": error_message})
                 yield _sse_data({"type": "complete", "data": ""})
@@ -312,7 +326,15 @@ async def stream_query(
             "error": [("data", "error", "Unknown error")],
         }
         # Event types that are passed through as-is (no field mapping needed)
-        _PASSTHROUGH_EVENTS = {"stage", "complete"}
+        _PASSTHROUGH_EVENTS = {
+            "stage",
+            "complete",
+            "plan_overview",
+            "plan_step",
+            "plan_step_completed",
+            "step_activity",
+            "todo_update",
+        }
 
         def _stable_event_fingerprint(event_type: str, payload: dict[str, Any]) -> str:
             if event_type == "tool_call" and payload.get("id"):
@@ -373,6 +395,7 @@ async def stream_query(
                     user_id=current_user.id,
                     messages=history,
                     system_prompt=system_prompt,
+                    attachment_context=file_context,
                     provider=request.provider,
                     model=request.model,
                     attachment_ids=request.attachment_ids,

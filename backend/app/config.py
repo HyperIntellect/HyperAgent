@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     context_offloading_persistent_enabled: bool = False  # Persist scratchpad entries cross-thread
     context_tool_output_summarization_enabled: bool = False  # Summarize token-heavy tool outputs
 
+    # Memory management
+    memory_relevance_threshold: float = 0.3  # Min relevance score to inject a memory (0.0–1.0)
+    memory_decay_days: int = 90  # Exclude memories not accessed in N days
+    memory_max_per_user: int = 100  # Max memories per user (evict oldest on overflow)
+    memory_eviction_enabled: bool = True  # Enable decay/eviction
+
     # Sandbox Provider
     sandbox_provider: Literal["e2b", "boxlite"] = "e2b"
 
@@ -184,6 +190,13 @@ class Settings(BaseSettings):
 
     # ReAct Loop Configuration
     react_max_iterations: int = 5  # Maximum number of tool-calling iterations
+    task_agent_timeout: int = 270  # Wall-clock timeout (s) for task agent loop
+
+    # Reflection (executor quality gate)
+    reflection_enabled: bool = True
+    reflection_model_tier: str = "lite"  # use LITE for cheap reflection
+    reflection_max_count: int = 1  # max reflections per executor invocation
+    reflection_min_tool_iterations: int = 1  # only reflect if tools were actually used
 
     # Feature flags for progressive rollout
     policy_engine_v1: bool = True

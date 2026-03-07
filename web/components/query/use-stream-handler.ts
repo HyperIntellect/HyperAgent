@@ -262,6 +262,30 @@ export function createStreamHandlers(deps: StreamHandlerDeps): StreamReducerHand
                 smartOpenComputer("file", false);
             }
         },
+        onPlanOverview: (event: StreamEvent) => {
+            flushTokenBatch();
+            const totalSteps = (event as unknown as Record<string, unknown>).total_steps as number || 0;
+            updateAgentStage(tChat("agent.planning", { steps: String(totalSteps) }));
+            addStreamingEvent(event);
+        },
+        onPlanStep: (event: StreamEvent) => {
+            const raw = event as unknown as Record<string, unknown>;
+            const action = (raw.action as string) || "";
+            const stepNum = (raw.step_number as number) || 0;
+            const total = (raw.total_steps as number) || 0;
+            updateAgentStage(tChat("agent.executingStep", { step: String(stepNum), total: String(total), action }));
+            addStreamingEvent(event);
+        },
+        onPlanStepCompleted: (event: StreamEvent) => addStreamingEvent(event),
+        onStepActivity: (event: StreamEvent) => {
+            const title = (event.step_title as string) || "";
+            const status = (event.status as string) || "";
+            if (status === "running") {
+                updateAgentStage(title);
+            }
+            addStreamingEvent(event);
+        },
+        onTodoUpdate: (event: StreamEvent) => addStreamingEvent(event),
         onInterrupt: (interruptEvent: InterruptEvent, rawEvent: StreamEvent) => {
             setActiveInterrupt(interruptEvent);
             addStreamingEvent(rawEvent);

@@ -17,6 +17,7 @@ from typing import Any, Callable, TypeVar
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from app.agents.context_compression import snap_to_tool_pair_boundary
 from app.agents.context_policy import apply_context_policy
 from app.ai.llm import extract_text_from_content
 from app.config import settings
@@ -268,7 +269,7 @@ async def execute_tool_with_retry(
         tool_name=tool.name,
         tool_args={k: v for k, v in tool_input.items() if k not in ["user_id", "task_id"]},  # Exclude sensitive context
     )
-    
+
     try:
         result = await execute_with_retry(
             tool.ainvoke,
@@ -277,7 +278,7 @@ async def execute_tool_with_retry(
             base_delay=base_delay,
         )
         result_str = str(result) if result is not None else ""
-        
+
         # Log tool completion in debug mode
         logger.debug(
             "tool_completed",
@@ -285,7 +286,7 @@ async def execute_tool_with_retry(
             result_length=len(result_str),
             result_preview=result_str[:200] if result_str else None,
         )
-        
+
         return result_str
 
     except TRANSIENT_ERRORS as e:
@@ -956,48 +957,6 @@ def estimate_message_tokens(message: BaseMessage) -> int:
     return len(content) // 4 + 1
 
 
-def _snap_to_tool_pair_boundary(messages: list[BaseMessage], split_index: int) -> int:
-    """Adjust a split index so it doesn't orphan ToolMessages from their AIMessage.
-
-    A valid boundary must not:
-    - Place an AIMessage with tool_calls in the dropped portion while its
-      ToolMessage responses are in the kept portion (or vice versa).
-
-    We scan forward from the proposed split to find a clean boundary where:
-    - The message at split_index is NOT a ToolMessage (which would be orphaned
-      from its AIMessage in the dropped portion)
-    - The message just before split_index is NOT an AIMessage with tool_calls
-      (whose ToolMessage responses would be in the kept portion)
-
-    Args:
-        messages: The message list being split
-        split_index: Proposed split point (messages[:split_index] dropped,
-                     messages[split_index:] kept)
-
-    Returns:
-        Adjusted split index that respects tool call/result pairing
-    """
-    if split_index <= 0 or split_index >= len(messages):
-        return split_index
-
-    # Scan backward: if the message at split_index is a ToolMessage, we need
-    # to include its parent AIMessage in the kept portion too.
-    while split_index > 0 and isinstance(messages[split_index], ToolMessage):
-        split_index -= 1
-
-    # Now check: if the message just before split_index is an AIMessage with
-    # tool_calls, its ToolMessages would be in the kept portion but the AIMessage
-    # would be dropped. Include it in the kept portion.
-    if (
-        split_index > 0
-        and isinstance(messages[split_index - 1], AIMessage)
-        and getattr(messages[split_index - 1], "tool_calls", None)
-    ):
-        split_index -= 1
-
-    return split_index
-
-
 def truncate_messages_to_budget(
     messages: list[BaseMessage],
     max_tokens: int = 100000,
@@ -1044,7 +1003,7 @@ def truncate_messages_to_budget(
     if raw_split <= 0:
         return messages, False
 
-    split_index = _snap_to_tool_pair_boundary(other_messages, raw_split)
+    split_index = snap_to_tool_pair_boundary(other_messages, raw_split)
 
     # Preserve the most recent messages (after snapping)
     if split_index < len(other_messages):
@@ -1067,13 +1026,16 @@ def truncate_messages_to_budget(
 
     # Add droppable messages from most recent, dropping oldest first
     remaining_budget = max_tokens - preserved_tokens
-    kept_droppable = []
 
-    for msg in reversed(droppable):
-        msg_tokens = estimate_message_tokens(msg)
+    # Walk droppable newest-to-oldest, accumulating indices to keep
+    keep_indices: set[int] = set()
+    for i in range(len(droppable) - 1, -1, -1):
+        msg_tokens = estimate_message_tokens(droppable[i])
         if remaining_budget >= msg_tokens:
-            kept_droppable.insert(0, msg)
+            keep_indices.add(i)
             remaining_budget -= msg_tokens
+
+    kept_droppable = [droppable[i] for i in range(len(droppable)) if i in keep_indices]
 
     truncated = system_messages + kept_droppable + preserved_recent
     was_truncated = len(truncated) < len(messages)

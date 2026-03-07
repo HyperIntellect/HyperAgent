@@ -647,7 +647,7 @@ function MessageActions({ copied, onCopy, onRegenerate, events }: MessageActions
             {events && events.length > 0 && (
                 <>
                     <div className="flex-1" />
-                    <CostIndicator events={events} />
+                    <CostIndicator events={events} variant="badge" />
                 </>
             )}
         </div>

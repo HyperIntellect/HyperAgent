@@ -120,6 +120,7 @@ class LLMService:
                 project=settings.gcp_project_id,
                 location=settings.gcp_location,
                 streaming=True,
+                stream_usage=True,
                 timeout=float(settings.llm_request_timeout),
                 max_retries=settings.llm_max_retries,
             )
@@ -129,6 +130,7 @@ class LLMService:
             api_key=settings.gemini_api_key,
             model=model or settings.tier_pro_gemini,
             streaming=True,
+            stream_usage=True,
             timeout=float(settings.llm_request_timeout),
             max_retries=settings.llm_max_retries,
         )
@@ -159,6 +161,7 @@ class LLMService:
             base_url=config.base_url,
             model=effective_model,
             streaming=True,
+            stream_usage=True,
             request_timeout=float(settings.llm_request_timeout),
             max_retries=settings.llm_max_retries,
             extra_body=extra_body,

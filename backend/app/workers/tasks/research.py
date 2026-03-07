@@ -6,7 +6,7 @@ from typing import Any
 
 from redis.asyncio import Redis
 
-from app.agents import agent_supervisor
+from app.agents import agent_orchestrator as agent_supervisor
 from app.config import settings
 from app.core.logging import get_logger
 from app.db.base import async_session_maker
@@ -15,9 +15,6 @@ from app.repository import deep_research_repository
 from app.workers.progress import ProgressReporter
 
 logger = get_logger(__name__)
-
-# Configuration constants
-TOKEN_BATCH_SIZE = 10  # Number of tokens to batch before emitting
 
 # Progress percentages for each step
 STEP_PROGRESS = {
@@ -71,41 +68,9 @@ async def run_research_task(
     async with async_session_maker() as db:
         try:
             # Verify task exists in database before proceeding
-            # Use raw SQL to bypass any ORM caching and ensure fresh database state
-            from sqlalchemy import text
-
-            task = None
-            max_retries = 5
-            for attempt in range(max_retries):
-                # Force fresh query - bypass identity map by using raw SQL check first
-                result = await db.execute(
-                    text("SELECT id FROM research_tasks WHERE id = :task_id"),
-                    {"task_id": task_id},
-                )
-                row = result.fetchone()
-
-                if row is not None:
-                    # Task exists in DB, now get the full ORM object
-                    db.expire_all()  # Clear any cached state
-                    task = await deep_research_repository.get_task(db, task_id)
-                    if task is not None:
-                        break
-
-                if attempt < max_retries - 1:
-                    delay = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s, 4s
-                    logger.warning(
-                        "task_not_found_retrying",
-                        task_id=task_id,
-                        attempt=attempt + 1,
-                        delay=delay,
-                    )
-                    await asyncio.sleep(delay)
-
+            task = await deep_research_repository.get_task(db, task_id)
             if task is None:
-                raise ValueError(
-                    f"Task {task_id} not found in database after {max_retries} attempts. "
-                    "The task may have been deleted or never created."
-                )
+                raise ValueError(f"Task {task_id} not found in database")
 
             # Clear any existing data from previous runs (retry scenario)
             await deep_research_repository.clear_task_steps(db, task_id)
@@ -121,8 +86,10 @@ async def run_research_task(
             await progress.emit("task_started", {"task_id": task_id})
 
             report_content: list[str] = []
+            source_count = 0
             step_ids: dict[str, str] = {}
             token_buffer: list[str] = []
+            last_flush_time = asyncio.get_event_loop().time()
 
             # Run the research agent via supervisor with timeout protection
             async with asyncio.timeout(settings.research_task_timeout):
@@ -182,7 +149,8 @@ async def run_research_task(
                                 )
                                 await progress.emit_progress(STEP_PROGRESS[step_type], step_type)
 
-                            await db.commit()
+                            if status != "running":
+                                await db.commit()
                         except Exception as step_error:
                             # Handle FK violation or other DB errors gracefully
                             logger.error(
@@ -203,6 +171,7 @@ async def run_research_task(
                     elif event["type"] == "source":
                         # Create source in database
                         source_id = str(uuid.uuid4())
+                        source_count += 1
                         try:
                             await deep_research_repository.add_source(
                                 db=db,
@@ -213,7 +182,8 @@ async def run_research_task(
                                 snippet=event.get("snippet"),
                                 relevance_score=event.get("relevance_score"),
                             )
-                            await db.commit()
+                            if source_count % 5 == 0:
+                                await db.commit()
                         except Exception as source_error:
                             # Handle FK violation or other DB errors gracefully
                             logger.error(
@@ -252,10 +222,12 @@ async def run_research_task(
                         report_content.append(event["content"])
                         token_buffer.append(event["content"])
 
-                        # Batch token updates to reduce Redis calls
-                        if len(token_buffer) >= TOKEN_BATCH_SIZE:
+                        # Time-based flush: emit every 100ms
+                        now = asyncio.get_event_loop().time()
+                        if now - last_flush_time >= 0.1:
                             await progress.emit_token_batch("".join(token_buffer))
                             token_buffer.clear()
+                            last_flush_time = now
 
             # Flush remaining tokens
             if token_buffer:

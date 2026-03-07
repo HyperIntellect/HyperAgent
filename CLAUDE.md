@@ -188,25 +188,35 @@ if (!hasHydrated) return null; // or loading state
 
 ### Multi-Agent System
 
-HyperAgent uses a **hybrid architecture** with two agents:
+HyperAgent uses a **three-component architecture** combining Plan-and-Execute with ReAct:
 
-**Task Agent** (`backend/app/agents/subagents/task.py`):
-- General-purpose ReAct loop with tool calling
+**Orchestrator** (`backend/app/agents/orchestrator.py`):
+- Main graph: classify → plan → dispatch_step → verify → finalize
+- Heuristic-based query classification (simple/complex, no LLM call) via `backend/app/agents/classifier.py`
+- Simple queries go directly to ExecutorAgent; complex queries go through PlannerAgent first
+- Step dispatch loop: invokes ExecutorAgent per plan step with timeout handling
+- LLM-based verification after plan execution, with re-planning on failure (max 2 attempts)
+- `AgentOrchestrator` class is a drop-in replacement for the deprecated `AgentSupervisor`
+
+**ExecutorAgent** (`backend/app/agents/executor.py`):
+- Self-contained ReAct loop for a single step/task (extracted from old task.py)
+- Graph: reason → act → wait_interrupt → reason → ... → reflect? → complete
 - Handles ~80% of requests: chat, data analysis, app building, image generation, slide creation, browser automation
 - Dedicated mode bypass: app/image/slide modes directly invoke corresponding skills without LLM routing
-- Supports planned execution via `task_planning` skill with `plan_overview`/`plan_step_completed` events
-- Todo file persistence: writes execution plan to `/home/user/.hyperagent/todo.md` in sandbox, injects as system context each iteration
 - Anti-repetition: detects consecutive identical tool calls (MD5 hash), injects variation prompts after 3 repeats
 - Optional CodeAct mode: `execute_script` tool with `hyperagent` helper library (gated behind `execution_mode: "codeact"`)
+- **Reflection** (`backend/app/agents/reflection.py`): Hybrid quality gate combining prompt-based self-reflection (zero cost) with a selective LITE-tier LLM evaluation. Fires only when tools were used and the agent tries to finalize; skipped for dedicated modes. Verdicts: `pass` (complete), `retry` (back to reason with feedback), `complete_with_note`. Config: `REFLECTION_ENABLED`, `REFLECTION_MAX_COUNT`, `REFLECTION_MIN_TOOL_ITERATIONS`
+
+**PlannerAgent** (`backend/app/agents/planner.py`):
+- Single-node LangGraph subgraph for task decomposition
+- Decomposes complex queries into structured PlanStep objects (step_number, goal, tools_hint, expected_output)
+- Supports plan revision with context from failed steps
 
 **Research Agent** (`backend/app/agents/subagents/research.py`):
 - Multi-step research: search → analyze → synthesize → write report
 - Used for deep research requiring 10+ sources
 
-**Supervisor** (`backend/app/agents/supervisor.py`):
-- Routes queries to Task or Research agent
-- Manages agent handoff (Task → Research, max 3 per request)
-- Handles event streaming and state management
+> **Deprecated:** `supervisor.py` and `subagents/task.py` are kept for backward compatibility. Imports are redirected to `orchestrator.py` and `executor.py`.
 
 **Skills System** (7 builtin skills):
 - `image_generation` — AI image generation (Gemini/DALL-E)

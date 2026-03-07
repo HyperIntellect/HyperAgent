@@ -1,12 +1,12 @@
 """Task Queue Service - Abstraction layer for submitting background jobs."""
 
+import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from arq import ArqRedis, create_pool
 
-from app.config import settings
 from app.core.logging import get_logger
 from app.workers.config import get_redis_settings
 
@@ -56,7 +56,20 @@ class TaskQueueService:
         Returns:
             ARQ job ID
         """
+        # Check for duplicate query within 5-minute window
+        query_hash = hashlib.sha256(f"{user_id}:{query}".encode()).hexdigest()[:16]
+        dedup_key = f"hyperagent:dedup:{query_hash}"
         pool = await self.get_pool()
+
+        existing = await pool.get(dedup_key)
+        if existing:
+            job_id_str = existing.decode() if isinstance(existing, bytes) else existing
+            logger.info(
+                "duplicate_task_skipped",
+                task_id=task_id,
+                existing_job_id=job_id_str,
+            )
+            return job_id_str
 
         job = await pool.enqueue_job(
             "run_research_task",
@@ -65,9 +78,11 @@ class TaskQueueService:
             depth=depth,
             user_id=user_id,
             locale=locale,
-            _defer_by=delay,
+            _defer_by=delay or timedelta(seconds=1),
             _job_id=f"research:{task_id}",
         )
+
+        await pool.set(dedup_key, job.job_id, ex=300)  # 5-minute TTL
 
         logger.info(
             "task_enqueued",

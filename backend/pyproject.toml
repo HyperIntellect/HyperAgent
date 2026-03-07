@@ -56,6 +56,9 @@ select = ["E", "F", "I", "W"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "langsmith_integration: tests requiring LangSmith integration (skipped when unavailable)",
+]
 
 [dependency-groups]
 dev = [

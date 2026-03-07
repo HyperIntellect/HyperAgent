@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from evals.conftest import RESPONSE_QUALITY_THRESHOLD
 from evals.evaluators.response_quality_evaluator import ResponseQualityEvaluator
 from evals.mocks.mock_llm import MockChatModel, MockLLMConfig
 
@@ -57,15 +58,18 @@ class TestResponseQuality:
             print(f"  - {r['id']}: {r['score']:.2f}")
 
         # Assert minimum quality threshold
-        assert avg_score >= 0.7, f"Average quality score {avg_score:.2f} < 0.7 threshold"
+        assert avg_score >= RESPONSE_QUALITY_THRESHOLD, (
+            f"Average quality score {avg_score:.2f} < {RESPONSE_QUALITY_THRESHOLD} threshold"
+        )
 
     @pytest.mark.asyncio
-    async def test_quality_by_category(self, response_quality_cases, quality_evaluator):
-        """Test response quality broken down by category.
+    async def test_response_quality_varies_by_category(
+        self, response_quality_cases, quality_evaluator
+    ):
+        """Test that mock judge returns different scores for different categories.
 
-        Args:
-            response_quality_cases: Test cases from response_quality.json
-            quality_evaluator: Evaluator with mock judge LLM
+        Verifies Issue 3 fix: the mock judge is pattern-aware and doesn't
+        return a hardcoded score for every input.
         """
         category_scores: dict[str, list[float]] = {}
 
@@ -87,9 +91,17 @@ class TestResponseQuality:
         print("Response Quality by Category:")
         print(f"{'=' * 60}")
 
+        all_averages = []
         for category, scores in sorted(category_scores.items()):
             avg = sum(scores) / len(scores)
+            all_averages.append(avg)
             print(f"  {category}: {avg:.2f}")
+
+        # Verify scores vary (not all identical)
+        assert len(set(all_averages)) > 1, (
+            "Mock judge returned identical averages for all categories — "
+            "scores should vary by category"
+        )
 
     @pytest.mark.asyncio
     async def test_evaluator_returns_score(self, quality_evaluator):
@@ -203,7 +215,7 @@ class TestSafetyEvaluation:
         )
 
         # Safety refusals should score high
-        assert result.score >= 0.7
+        assert result.score >= RESPONSE_QUALITY_THRESHOLD
 
     @pytest.mark.asyncio
     async def test_pii_handling(self, safety_judge):
@@ -222,7 +234,7 @@ class TestSafetyEvaluation:
             },
         )
 
-        assert result.score >= 0.7
+        assert result.score >= RESPONSE_QUALITY_THRESHOLD
 
 
 class TestResponseQualityBatch:
@@ -251,3 +263,42 @@ class TestResponseQualityBatch:
         assert summary["total"] == 5
         assert 0.0 <= summary["average_score"] <= 1.0
         assert "category_averages" in summary
+
+
+class TestResponseQualityLangSmith:
+    """LangSmith integration tests for response quality (Issue 2)."""
+
+    @pytest.mark.langsmith_integration
+    @pytest.mark.asyncio
+    async def test_response_quality_evaluator_function(self, langsmith_client):
+        """Test the LangSmith-compatible response quality evaluator function."""
+        from evals.evaluators import response_quality_evaluator
+
+        class MockRun:
+            def __init__(self, outputs):
+                self.outputs = outputs
+
+        class MockExample:
+            def __init__(self, inputs, outputs):
+                self.inputs = inputs
+                self.outputs = outputs
+
+        run = MockRun(outputs={"response": "Python is a programming language."})
+        example = MockExample(
+            inputs={"query": "What is Python?"},
+            outputs={
+                "criteria": {
+                    "accuracy": "Factually correct",
+                    "helpfulness": "Useful response",
+                }
+            },
+        )
+
+        # This exercises the LangSmith-compatible evaluator with a real call
+        # It will use the default judge LLM or fail gracefully
+        try:
+            result = response_quality_evaluator(run, example)
+            assert result.key == "response_quality"
+            assert 0.0 <= result.score <= 1.0
+        except ValueError:
+            pytest.skip("Judge LLM not available for LangSmith test")
